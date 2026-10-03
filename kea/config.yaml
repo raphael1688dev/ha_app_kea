@@ -6,7 +6,7 @@ url: "https://github.com/raphael1688dev/ha_app_kea"
 arch:
   - amd64
   - aarch64
-  - armv7
+init: false
 startup: services
 boot: auto
 host_network: true
