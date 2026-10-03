@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kea DHCP</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #fff; --fg: #1c1c1e; --muted: #6b7280; --line: #e2e5ea;
+    --accent: #03a9f4; --accent-fg: #fff; --danger: #d32f2f; --ok: #2e7d32; --warn: #ed6c02;
+    --input-bg: #fff; --err-bg: #fdecea; --warn-bg: #fff4e5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318; --card: #1c1f26; --fg: #e8eaed; --muted: #9aa0a6; --line: #2d313a;
+      --input-bg: #14171c; --err-bg: #3b1f1f; --warn-bg: #3a2c14;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  h3 { margin: 0; font-size: 15px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .grow { flex: 1; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px;
+          border: 1px solid var(--line); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.up { background: var(--ok); } .dot.down { background: var(--danger); }
+  button { font: inherit; cursor: pointer; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--card); color: var(--fg); }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  nav { display: flex; gap: 4px; margin: 14px 0; border-bottom: 1px solid var(--line); }
+  nav button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 8px 16px; }
+  nav button.active { border-bottom-color: var(--accent); font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  input { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+          background: var(--input-bg); color: var(--fg); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 12px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td input { min-width: 110px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  .scroll { overflow-x: auto; }
+  .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; white-space: pre-wrap; }
+  .banner.err { background: var(--err-bg); border: 1px solid var(--danger); }
+  .banner.warn { background: var(--warn-bg); border: 1px solid var(--warn); }
+  .banner ul { margin: 4px 0 0; padding-left: 20px; }
+  .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line);
+             display: flex; gap: 10px; align-items: center; }
+  .empty { padding: 16px; text-align: center; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ISC Kea DHCP</h1>
+  <div id="banner"></div>
+  <div id="kerr"></div>
+  <div class="card row" id="statusbar"></div>
+  <nav id="tabs"></nav>
+  <section id="view"></section>
+  <div class="savebar" id="savebar" hidden>
+    <button class="primary" id="save">儲存並套用</button>
+    <button id="discard">放棄變更</button>
+    <span class="muted" id="savemsg">有尚未儲存的變更</span>
+  </div>
+</main>
+
+<script>
+"use strict";
+// All URLs are relative (no leading slash) so the page works under HA Ingress.
+const API = (p) => "api/" + p;
+const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "租約"]];
+
+let state = { status: null, saved: null, draft: null, leases: null };
+let tab = "dhcp4";
+let dirty = false;
+let busy = false;
+
+// ------------------------------------------------------------- DOM helper
+// Text is always set through textContent / properties, never innerHTML:
+// hostnames in leases are chosen by network clients and must not be trusted.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (v === true) el.setAttribute(k, "");
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+async function api(path, opts) {
+  let res;
+  try { res = await fetch(API(path), opts); }
+  catch (e) { throw { errors: ["無法連線到 Add-on:" + e.message] }; }
+  let body = null;
+  try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
+  if (!res.ok) {
+    const errors = (body && body.errors) || (body && body.error && [body.error]) ||
+                   (body && body.detail && [JSON.stringify(body.detail)]) || ["HTTP " + res.status];
+    throw { errors };
+  }
+  return body;
+}
+const sendJSON = (method, path, data) => api(path, {
+  method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data || {}),
+});
+
+// ------------------------------------------------------------- banners
+function showErrors(errors, kind) {
+  const box = document.getElementById("banner");
+  box.replaceChildren();
+  if (!errors || !errors.length) return;
+  box.append(h("div", { class: "banner " + (kind || "err") },
+    kind === "warn" ? "注意" : "設定未套用", h("ul", {}, errors.map((e) => h("li", {}, e)))));
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ------------------------------------------------------------- draft model
+function toDraft(settings) {
+  const d = JSON.parse(JSON.stringify(settings));
+  for (const fam of ["dhcp4", "dhcp6"])
+    for (const s of d[fam].subnets) s.dns = (s.dns || []).join(", ");
+  return d;
+}
+function markDirty() {
+  dirty = true;
+  document.getElementById("savebar").hidden = false;
+}
+function clearDirty() {
+  dirty = false;
+  document.getElementById("savebar").hidden = true;
+}
+
+// ------------------------------------------------------------- rendering
+function fmtDuration(sec) {
+  if (sec == null) return "";
+  if (sec < 60) return sec + " 秒";
+  if (sec < 3600) return Math.floor(sec / 60) + " 分";
+  if (sec < 86400) return Math.floor(sec / 3600) + " 時 " + Math.floor((sec % 3600) / 60) + " 分";
+  return Math.floor(sec / 86400) + " 天 " + Math.floor((sec % 86400) / 3600) + " 時";
+}
+
+function renderStatus() {
+  const bar = document.getElementById("statusbar");
+  bar.replaceChildren();
+  const st = state.status;
+  if (!st) return;
+  bar.append(h("span", { class: "muted" }, "網卡:"), h("b", {}, st.interface));
+  for (const [key, label] of [["dhcp4", "DHCPv4"], ["dhcp6", "DHCPv6"]]) {
+    const d = st.daemons[key];
+    let text, cls = "";
+    if (!d.enabled) text = "已停用";
+    else if (!d.installed) text = "未安裝";
+    else if (d.running) { text = "執行中"; cls = "up"; }
+    else { text = d.exit_code != null ? "已停止 (exit " + d.exit_code + ")" : "未執行"; cls = "down"; }
+    bar.append(h("span", { class: "pill" }, h("span", { class: "dot " + cls }), label + ":" + text));
+  }
+  bar.append(h("span", { class: "grow" }),
+    h("button", { onclick: onRestart, disabled: busy }, "重新啟動 Kea"));
+  // Daemon problems live in their own box so the 5s status refresh never
+  // overwrites (or scrolls away from) validation errors from a save attempt.
+  const kerr = document.getElementById("kerr");
+  kerr.replaceChildren();
+  if (st.last_error)
+    kerr.append(h("div", { class: "banner err" }, "Kea 狀態異常\n" + st.last_error));
+}
+
+function renderTabs() {
+  const nav = document.getElementById("tabs");
+  nav.replaceChildren(...TABS.map(([id, label]) =>
+    h("button", { class: id === tab ? "active" : "", onclick: () => { tab = id; renderTabs(); renderView(); } }, label)));
+}
+
+function field(label, obj, key, opts) {
+  const input = h("input", Object.assign({ value: obj[key] == null ? "" : obj[key], autocomplete: "off",
+    spellcheck: "false", oninput: (e) => { obj[key] = e.target.value; markDirty(); } }, opts || {}));
+  return h("div", {}, h("label", {}, label), input);
+}
+
+function subnetCard(fam, subnets, idx) {
+  const v4 = fam === "dhcp4";
+  const s = subnets[idx];
+  const fields = [
+    field("網段 (CIDR)", s, "subnet", { placeholder: v4 ? "192.168.1.0/24" : "fd00::/64" }),
+    field("Pool 起始 IP", s, "pool_start", { placeholder: v4 ? "192.168.1.100" : "fd00::1000" }),
+    field("Pool 結束 IP", s, "pool_end", { placeholder: v4 ? "192.168.1.200" : "fd00::2000" }),
+  ];
+  if (v4) fields.push(field("預設閘道", s, "router", { placeholder: "192.168.1.1" }));
+  fields.push(field("DNS(逗號分隔)", s, "dns"),
+              field("租約秒數", s, "lease_time", { inputmode: "numeric" }));
+
+  const idLabel = v4 ? "MAC 位址" : "DUID";
+  const idKey = v4 ? "hw_address" : "duid";
+  const resRows = (s.reservations || []).map((r, ri) => h("tr", {},
+    h("td", {}, h("input", { class: "mono", value: r[idKey] || "", oninput: (e) => { r[idKey] = e.target.value; markDirty(); },
+                              placeholder: v4 ? "aa:bb:cc:dd:ee:ff" : "00:01:00:01:..." })),
+    h("td", {}, h("input", { class: "mono", value: r.ip_address || "", oninput: (e) => { r.ip_address = e.target.value; markDirty(); } })),
+    h("td", {}, h("input", { value: r.hostname || "", oninput: (e) => { r.hostname = e.target.value; markDirty(); } })),
+    h("td", {}, h("button", { class: "danger", onclick: () => { s.reservations.splice(ri, 1); markDirty(); renderView(); } }, "刪除"))));
+
+  return h("div", { class: "card" },
+    h("div", { class: "row" },
+      h("h3", { class: "grow" }, "網段 #" + (idx + 1) + (s.subnet ? "  " + s.subnet : "")),
+      h("button", { class: "danger", onclick: () => {
+        if (!confirm("刪除這個網段(含其靜態綁定)?")) return;
+        subnets.splice(idx, 1); markDirty(); renderView(); } }, "刪除網段")),
+    h("div", { class: "fields" }, fields),
+    h("h3", {}, "靜態綁定"),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, idLabel), h("th", {}, "固定 IP"), h("th", {}, "主機名稱(選填)"), h("th", {}))),
+      h("tbody", {}, resRows.length ? resRows
+        : h("tr", {}, h("td", { colspan: 4, class: "muted" }, "尚無靜態綁定"))))),
+    h("p", {}, h("button", { onclick: () => {
+      (s.reservations = s.reservations || []).push({ [idKey]: "", ip_address: "", hostname: "" });
+      markDirty(); renderView(); } }, "+ 新增靜態綁定")));
+}
+
+function renderFamily(fam) {
+  const view = document.getElementById("view");
+  const subnets = state.draft[fam].subnets;
+  const nodes = [];
+  if (fam === "dhcp6" && state.status && !state.status.enable_dhcp6)
+    nodes.push(h("div", { class: "banner warn" },
+      "DHCPv6 目前在 Add-on 設定頁中為停用狀態,此處的 IPv6 設定會被儲存但不會生效。請到「設定」頁開啟 enable_dhcp6 後重新啟動 Add-on。"));
+  subnets.forEach((_, i) => nodes.push(subnetCard(fam, subnets, i)));
+  if (!subnets.length) nodes.push(h("div", { class: "card empty" }, "尚未設定任何網段。Kea 在沒有網段時不會發放位址。"));
+  nodes.push(h("p", {}, h("button", { onclick: () => {
+    subnets.push(Object.assign({ id: null, subnet: "", pool_start: "", pool_end: "", dns: "", lease_time: 86400, reservations: [] },
+                               fam === "dhcp4" ? { router: "" } : {}));
+    markDirty(); renderView(); } }, "+ 新增網段")));
+  view.replaceChildren(...nodes);
+}
+
+function leaseTable(title, rows, idLabel) {
+  return h("div", { class: "card" },
+    h("h3", {}, title + "(" + rows.length + ")"),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "IP 位址"), h("th", {}, idLabel), h("th", {}, "主機名稱"),
+                       h("th", {}, "網段 ID"), h("th", {}, "剩餘租期"))),
+      h("tbody", {}, rows.length ? rows.map((l) => h("tr", {},
+        h("td", { class: "mono" }, l.address), h("td", { class: "mono" }, l.identifier),
+        h("td", {}, l.hostname || "—"), h("td", {}, l.subnet_id == null ? "—" : l.subnet_id),
+        h("td", {}, fmtDuration(l.remaining))))
+        : h("tr", {}, h("td", { colspan: 5, class: "muted" }, "目前沒有有效租約"))))));
+}
+
+function renderLeases() {
+  const view = document.getElementById("view");
+  const L = state.leases;
+  const nodes = [h("p", {}, h("button", { onclick: loadLeases }, "重新整理"))];
+  if (!L) nodes.push(h("div", { class: "empty" }, "載入中…"));
+  else {
+    nodes.push(leaseTable("IPv4 租約", L.dhcp4, "MAC 位址"));
+    if (state.status && state.status.enable_dhcp6) nodes.push(leaseTable("IPv6 租約", L.dhcp6, "DUID"));
+  }
+  view.replaceChildren(...nodes);
+}
+
+function renderView() {
+  if (!state.draft) return;
+  if (tab === "leases") renderLeases(); else renderFamily(tab);
+}
+
+// ------------------------------------------------------------- actions
+function payload() {
+  // dns stays a string; the server accepts comma/space separated text.
+  return JSON.parse(JSON.stringify(state.draft));
+}
+
+async function loadAll() {
+  const data = await api("state");
+  state.status = data.status;
+  state.saved = data.settings;
+  if (!dirty) { state.draft = toDraft(data.settings); }
+  renderStatus(); renderView();
+}
+async function loadLeases() {
+  try { state.leases = await api("leases"); } catch (e) { showErrors(e.errors, "err"); }
+  if (tab === "leases") renderLeases();
+}
+async function refreshStatus() {
+  try { state.status = await api("status"); renderStatus(); } catch (e) { /* transient */ }
+}
+
+async function setBusy(on) {
+  busy = on;
+  for (const b of document.querySelectorAll("button")) b.disabled = on;
+}
+
+document.getElementById("save").addEventListener("click", async () => {
+  showErrors(null);
+  await setBusy(true);
+  try {
+    const res = await sendJSON("PUT", "settings", payload());
+    state.saved = res.settings; state.draft = toDraft(res.settings); state.status = res.status;
+    clearDirty();
+  } catch (e) { showErrors(e.errors); }
+  await setBusy(false);
+  renderStatus(); renderView();
+});
+
+document.getElementById("discard").addEventListener("click", () => {
+  if (!confirm("放棄所有未儲存的變更?")) return;
+  state.draft = toDraft(state.saved); clearDirty(); showErrors(null); renderView();
+});
+
+async function onRestart() {
+  if (dirty && !confirm("目前有未儲存的變更,重新啟動只會套用「已儲存」的設定。繼續?")) return;
+  showErrors(null);
+  await setBusy(true);
+  try { state.status = (await sendJSON("POST", "restart")).status; }
+  catch (e) { showErrors(e.errors); }
+  await setBusy(false);
+  renderStatus();
+}
+
+// ------------------------------------------------------------- boot
+(async function init() {
+  renderTabs();
+  try { await loadAll(); } catch (e) { showErrors(e.errors); }
+  setInterval(() => { if (!document.hidden && !busy) refreshStatus(); }, 5000);
+  setInterval(() => { if (!document.hidden && tab === "leases") loadLeases(); }, 10000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
+  loadLeases();
+})();
+</script>
+</body>
+</html>
