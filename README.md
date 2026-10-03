@@ -61,7 +61,24 @@ JavaScript and relative URLs so it works behind Ingress.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests
+pytest tests                              # fake Kea; tests that need the real Kea are skipped
+python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assistant Supervisor rules
 ```
 
-Tests use fake `kea-dhcp4` / `kea-dhcp6` scripts, so Kea does not need to be installed.
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main`, on pull requests, and weekly (Monday):
+
+| Job | What it checks |
+|---|---|
+| Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the add-on packaging |
+| Supervisor rules | `kea/config.yaml` against the **current** Supervisor source: valid `privileged` capabilities, non-deprecated `map` types and `arch` |
+| Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs), and a smoke test of the running container (startup, SIGHUP reload, lease deletion, restart) |
+| Image (aarch64) | Builds under QEMU and runs the real-Kea config tests (not on pull requests) |
+
+The image job also guards the Kea version: Alpine decides which Kea is installed, and `ci/kea-series`
+holds the approved `major.minor`. If Alpine moves to a different series the job fails; review the change
+(Kea release notes, generated config) and then update that file. If the **weekly** run fails, an issue is
+opened automatically, because something upstream changed without a commit here.
+
+To reproduce the smoke test locally you need Docker; see the `image` job for the exact commands.

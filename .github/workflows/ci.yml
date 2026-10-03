@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly rebuild without cache: catches Alpine / Kea / PyPI drift between our own changes.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------- unit tests
+  unit:
+    name: Unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      # Real-Kea tests are skipped here (no Kea on the runner); the `image` job runs them.
+      - run: python -m pytest tests -q -rs
+
+  # ------------------------------------------- rules of the Home Assistant Supervisor
+  supervisor-rules:
+    name: Supervisor rules (live)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pyyaml
+      # Compares kea/config.yaml with the current Supervisor source: valid `privileged`
+      # capabilities, non-deprecated `map` types and `arch` values. --strict: a failed
+      # download is an error here, so the check can never be silently skipped.
+      - run: python scripts/check_supervisor_rules.py --strict
+
+  # ------------------------------------------ image + real Kea (amd64)
+  image:
+    name: Image, real Kea config test, smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the add-on image
+        run: |
+          docker build \
+            --build-arg BUILD_VERSION=ci \
+            --build-arg BUILD_ARCH=amd64 \
+            --tag kea-addon-ci \
+            kea/
+
+      - name: Record component versions
+        id: versions
+        run: |
+          kea_version="$(docker run --rm --entrypoint kea-dhcp4 kea-addon-ci -v | head -n1)"
+          echo "kea=${kea_version}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Image contents (amd64)"
+            echo
+            echo "| Component | Version |"
+            echo "|---|---|"
+            echo "| Alpine | $(docker run --rm --entrypoint cat kea-addon-ci /etc/alpine-release) |"
+            echo "| Kea | ${kea_version} |"
+            echo "| Python | $(docker run --rm --entrypoint /opt/venv/bin/python kea-addon-ci --version) |"
+            echo
+            echo "<details><summary>pip freeze</summary>"
+            echo
+            echo '```'
+            docker run --rm --entrypoint /opt/venv/bin/pip kea-addon-ci freeze
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Kea series guard
+        # Alpine decides which Kea we get. A different major.minor than the approved series
+        # (ci/kea-series) means a deliberate upgrade: review it, then update that file.
+        run: |
+          expected="$(tr -d '[:space:]' < ci/kea-series)"
+          actual="${{ steps.versions.outputs.kea }}"
+          echo "approved series: ${expected}.x   installed: ${actual}"
+          case "${actual}" in
+            "${expected}".*) ;;
+            *)
+              echo "::error title=Kea series changed::Image has Kea ${actual}, approved series is ${expected}.x (ci/kea-series)."
+              exit 1 ;;
+          esac
+
+      - name: Test suite inside the image (real Kea config checks)
+        run: |
+          docker run --rm --entrypoint sh \
+            -e PYTHONDONTWRITEBYTECODE=1 -e REQUIRE_REAL_KEA=1 \
+            -v "$PWD:/repo:ro" \
+            kea-addon-ci -c '
+              /opt/venv/bin/pip install --quiet -r /repo/requirements-dev.txt &&
+              cd /repo &&
+              /opt/venv/bin/python -m pytest tests -q -rs -p no:cacheprovider
+            '
+
+      - name: Smoke test (start the container, reload, delete lease, restart)
+        run: |
+          mkdir -p "$RUNNER_TEMP/config"
+          docker run -d --name kea-smoke \
+            --cap-add NET_ADMIN --cap-add NET_RAW \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            -e KEA_UI_ALLOWED=127.0.0.1 \
+            -v "$PWD/ci/options.json:/data/options.json:ro" \
+            -v "$RUNNER_TEMP/config:/config" \
+            -v "$PWD/ci/smoke_test.py:/smoke_test.py:ro" \
+            kea-addon-ci
+          docker exec kea-smoke /opt/venv/bin/python /smoke_test.py
+
+      - name: Container log
+        if: always()
+        run: |
+          docker logs kea-smoke 2>&1 | tail -n 150 || true
+          docker rm -f kea-smoke >/dev/null 2>&1 || true
+
+  # ---------------------------------------------- aarch64 (build + real Kea config test)
+  image-arm64:
+    name: Image (aarch64, QEMU)
+    # Slow under emulation, so not on pull requests.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the add-on image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --build-arg BUILD_VERSION=ci \
+            --build-arg BUILD_ARCH=aarch64 \
+            --tag kea-addon-ci-arm64 \
+            --load \
+            kea/
+      - name: Real Kea config tests on aarch64
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint sh \
+            -e PYTHONDONTWRITEBYTECODE=1 -e REQUIRE_REAL_KEA=1 \
+            -v "$PWD:/repo:ro" \
+            kea-addon-ci-arm64 -c '
+              uname -m && kea-dhcp4 -v &&
+              /opt/venv/bin/pip install --quiet -r /repo/requirements-dev.txt &&
+              cd /repo &&
+              /opt/venv/bin/python -m pytest tests/test_real_kea.py -q -rs -p no:cacheprovider
+            '
+
+  # ------------------------------------------------- single required check
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [unit, supervisor-rules, image]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "unit=${{ needs.unit.result }} supervisor-rules=${{ needs.supervisor-rules.result }} image=${{ needs.image.result }}"
+          test "${{ needs.unit.result }}" = success
+          test "${{ needs.supervisor-rules.result }}" = success
+          test "${{ needs.image.result }}" = success
+
+  # ------------------------------------- weekly run failed: open / update an issue
+  report:
+    name: Report scheduled failure
+    if: failure() && github.event_name == 'schedule'
+    needs: [unit, supervisor-rules, image, image-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Scheduled CI failed (upstream drift?)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          body="The weekly CI run failed: ${run_url}
+
+          This usually means something upstream changed without any commit here: a new Kea in Alpine
+          (see the \"Kea series guard\" step), a changed Supervisor rule (\"Supervisor rules\" job),
+          or a broken dependency. Check the failing job, fix it, then close this issue."
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
