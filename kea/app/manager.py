@@ -65,7 +65,7 @@ class KeaManager:
 
         self.env = dict(os.environ)
         self.env.update({
-            "KEA_LEASE_DIR": self.data_dir,
+            "KEA_DHCP_DATA_DIR": self.data_dir,
             "KEA_PIDFILE_DIR": "/run/kea",
             "KEA_LOCKFILE_DIR": "/run/kea",
             "KEA_LOG_FILE_DIR": self.data_dir,

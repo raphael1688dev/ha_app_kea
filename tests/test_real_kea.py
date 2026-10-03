@@ -28,7 +28,7 @@ def test_real_kea_is_installed():
 
 def kea_env(tmp_path):
     env = dict(os.environ)
-    env.update({"KEA_LEASE_DIR": str(tmp_path), "KEA_PIDFILE_DIR": str(tmp_path),
+    env.update({"KEA_DHCP_DATA_DIR": str(tmp_path), "KEA_PIDFILE_DIR": str(tmp_path),
                 "KEA_LOCKFILE_DIR": str(tmp_path), "KEA_LOG_FILE_DIR": str(tmp_path)})
     return env
 
@@ -125,3 +125,33 @@ def test_manager_stage_and_test_with_real_kea(tmp_path):
     problems = mgr._stage_and_test(bad)
     assert problems and "rejected the configuration" in problems[0]
     assert not os.path.exists(mgr._conf_path("dhcp4", ".new"))     # staging cleaned up
+
+
+def _usable_interface():
+    try:
+        names = sorted(n for n in os.listdir("/sys/class/net") if n != "lo")
+    except OSError:
+        return None
+    return names[0] if names else None
+
+
+@pytest.mark.skipif(not _usable_interface(), reason="no network interface other than lo")
+def test_real_kea_really_starts_and_opens_the_lease_file(tmp_path):
+    """`-t` does not open the lease database, so it cannot catch a path Kea refuses at start-up
+    (this once broke the add-on: lease files outside /var/lib/kea need KEA_DHCP_DATA_DIR)."""
+    import time
+    settings = cfg.default_settings(_usable_interface())
+    rendered = cfg.render_dhcp4(settings, str(tmp_path / "kea-leases4.csv"))
+    conf = tmp_path / "kea-dhcp4.conf"
+    conf.write_text(json.dumps(rendered))
+    proc = subprocess.Popen(["kea-dhcp4", "-c", str(conf)], env=kea_env(tmp_path),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        time.sleep(4)
+        exited = proc.poll()
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        output = proc.communicate(timeout=15)[0]
+    assert exited is None, f"kea-dhcp4 exited with {exited}:\n{output}"
+    assert "MEMFILE_FAILED_TO_OPEN" not in output and "CONFIG_LOAD_FAIL" not in output, output

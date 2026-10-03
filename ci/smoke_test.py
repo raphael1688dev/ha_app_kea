@@ -39,6 +39,9 @@ def call(method, path, data=None):
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, json.loads(resp.read().decode() or "null")
     except urllib.error.HTTPError as err:
+        if err.code == 403:
+            raise Failure("the Web UI answered 403 (forbidden): KEA_UI_ALLOWED did not reach the "
+                          "server; check that run.sh uses with-contenv")
         try:
             return err.code, json.loads(err.read().decode())
         except ValueError:
@@ -50,6 +53,8 @@ def wait_for(predicate, what, timeout=60, interval=1.0):
     while time.time() < deadline:
         try:
             value = predicate()
+        except Failure:
+            raise
         except Exception:
             value = None
         if value:
@@ -67,7 +72,7 @@ def daemon(name="dhcp4"):
 
 
 def log_entries():
-    return call("GET", "/api/logs?limit=3000")[1]["entries"]
+    return (call("GET", "/api/logs?limit=3000")[1] or {}).get("entries", [])
 
 
 def check_log_clean(since_seq, what):
@@ -94,7 +99,15 @@ def apply_settings(settings):
 
 def run():
     step("waiting for Kea DHCPv4 to start")
-    wait_for(lambda: daemon()["running"], "kea-dhcp4 running", timeout=90)
+    def started():
+        st = status()
+        if st["daemons"]["dhcp4"]["running"]:
+            return True
+        if st["daemons"]["dhcp4"]["exit_code"] is not None or st["last_error"]:
+            raise Failure("kea-dhcp4 exited right after starting: " + str(st["last_error"]))
+        return False
+
+    wait_for(started, "kea-dhcp4 running", timeout=90)
     d = daemon()
     if not d["installed"]:
         raise Failure("kea-dhcp4 is not installed in the image")

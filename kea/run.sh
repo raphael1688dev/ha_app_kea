@@ -1,10 +1,15 @@
-#!/usr/bin/env bash
-# 啟動 Web UI。server.py 會負責產生 Kea 設定檔、啟動/重啟 kea-dhcp4 / kea-dhcp6，
-# 並在收到 SIGTERM 時一併停止它們。
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# `with-contenv` makes the container environment visible to this script (the s6 init of the
+# Home Assistant base image otherwise hides it); this is the standard pattern for apps.
+#
+# Starts the Web UI. server.py generates the Kea configuration, starts/reloads kea-dhcp4 and
+# kea-dhcp6, and stops them when it receives SIGTERM.
 set -euo pipefail
 
-# Kea 3.x 只允許特定目錄，透過環境變數放行租約與 pid/lock 路徑
-export KEA_LEASE_DIR=/config/kea
+# Kea 3.x only reads/writes lease files, pid files and lock files in fixed directories unless
+# these variables say otherwise (names per the Kea 3.0 upgrade notes).
+export KEA_DHCP_DATA_DIR=/config/kea
 export KEA_PIDFILE_DIR=/run/kea
 export KEA_LOCKFILE_DIR=/run/kea
 

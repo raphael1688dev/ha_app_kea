@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.2
+- Fix: Kea 3.0 refused to start because lease files were outside its default directory
+  (`invalid path specified: '/config/kea', supported path is '/var/lib/kea'`). The directory is now
+  passed with `KEA_DHCP_DATA_DIR`, the variable Kea 3.x actually reads (`KEA_LEASE_DIR` does not exist).
+- `run.sh` uses `with-contenv` so the container environment reaches the Web UI.
+
 ## 2.1.1
 - Fix: remove `NET_BIND_SERVICE` from `privileged` (not a valid Supervisor capability; it made the app
   fail validation). Binding UDP 67/547 does not need it.

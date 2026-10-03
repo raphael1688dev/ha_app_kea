@@ -275,3 +275,12 @@ def test_storage_guard(mgr, monkeypatch):
     assert mgr.storage_persistent() is True
     mgr.data_dir = "/configuration/kea"          # similar prefix must not count as /config
     assert mgr.storage_persistent() is True
+
+
+def test_kea_gets_the_documented_path_variables(mgr):
+    """Kea 3.x refuses lease/pid/lock files outside its default dirs unless these are set.
+    (KEA_LEASE_DIR does not exist; the lease directory variable is KEA_DHCP_DATA_DIR.)"""
+    assert mgr.env["KEA_DHCP_DATA_DIR"] == mgr.data_dir
+    assert "KEA_LEASE_DIR" not in mgr.env
+    for name in ("KEA_PIDFILE_DIR", "KEA_LOCKFILE_DIR", "KEA_LOG_FILE_DIR"):
+        assert mgr.env[name]

@@ -54,7 +54,7 @@
 
 ## 6. 未驗證的風險
 - 尚未 build 映像：Alpine 3.24 上 pip 安裝 `fastapi`/`pydantic-core` 是否有可用的 musllinux wheel、`kea-dhcp4`/`kea-dhcp6` 套件名稱與版本，皆待確認。
-- 尚未在真實 Kea 3.0.x 上跑：路徑限制（`KEA_LEASE_DIR` 等環境變數）、`output-options`、渲染出的設定（含多 Pool、`pd-pools`、`ntp-servers`、`domain-search`、自訂 option）是否通過 `kea -t`，只有假腳本測過流程。
+- ~~路徑限制~~ 已修正（CI 冒煙測試抓到）：Kea 3.0 的租約目錄環境變數是 `KEA_DHCP_DATA_DIR`，不是 `KEA_LEASE_DIR`；`kea -t` 不會開啟租約資料庫，所以只有真的啟動才會暴露這個問題。渲染出的設定（含多 Pool、`pd-pools`、`ntp-servers`、`domain-search`、自訂 option）已由 CI 以真 Kea 3.0.3 的 `-t` 驗證通過。
 - **SIGHUP 熱重載**：假 daemon 驗證了「訊號有送到、PID 不變」，但真實 Kea 收到 SIGHUP 後是否如預期重新讀取設定、失敗時是否保留舊設定，尚待實測。
 - **刪除租約**：依 Kea memfile 慣例（同位址以最後一列為準、`valid_lifetime=0` 代表已刪除）在 daemon 停止時追加一列；此語意依文件與記憶撰寫，未用真實 Kea 驗證。若 Kea 在 LFC 進行中被停止，檔案狀態亦未測。
 - Ingress 在 `host_network` 下的來源 IP 是否為 `172.30.32.2`（可用環境變數 `KEA_UI_ALLOWED` 調整；被擋時畫面會顯示 `forbidden (<ip>)`）。
