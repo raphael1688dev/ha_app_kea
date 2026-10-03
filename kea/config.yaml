@@ -1,0 +1,46 @@
+name: "ISC Kea DHCP Server"
+version: "1.0.0"
+slug: "isc_kea_dhcp"
+description: "ISC Kea Dual-Stack DHCP Server (DHCPv4 + optional DHCPv6)"
+url: "https://github.com/raphael1688dev/ha_app_kea"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: services
+boot: auto
+host_network: true
+privileged:
+  - NET_ADMIN
+  - NET_RAW
+  - NET_BIND_SERVICE
+map:
+  - config:rw
+options:
+  interface: "eth0"
+  subnet: "192.168.1.0/24"
+  pool_start: "192.168.1.100"
+  pool_end: "192.168.1.200"
+  router: "192.168.1.1"
+  dns: "1.1.1.1, 8.8.8.8"
+  lease_time: 86400
+  enable_dhcp6: false
+  subnet6: "fd00::/64"
+  pool6_start: "fd00::1000"
+  pool6_end: "fd00::2000"
+  dns6: "2606:4700:4700::1111, 2001:4860:4860::8888"
+  lease_time6: 86400
+schema:
+  interface: str
+  subnet: str
+  pool_start: str
+  pool_end: str
+  router: str
+  dns: str
+  lease_time: int
+  enable_dhcp6: bool
+  subnet6: str
+  pool6_start: str
+  pool6_end: str
+  dns6: str
+  lease_time6: int

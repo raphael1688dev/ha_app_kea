@@ -1,0 +1,40 @@
+configuration:
+  interface:
+    name: "實體網路介面"
+    description: "欲監聽 DHCP 廣播的網卡名稱（例如：eth0, enp3s0）"
+  subnet:
+    name: "IPv4 網段 (CIDR)"
+    description: "例如：192.168.1.0/24"
+  pool_start:
+    name: "IPv4 動態發放起始 IP"
+    description: "例如：192.168.1.100"
+  pool_end:
+    name: "IPv4 動態發放結束 IP"
+    description: "例如：192.168.1.200"
+  router:
+    name: "IPv4 預設閘道 (Gateway)"
+    description: "路由器的 IP 位址，例如：192.168.1.1"
+  dns:
+    name: "IPv4 DNS 伺服器"
+    description: "以逗號分隔，例如：1.1.1.1, 8.8.8.8"
+  lease_time:
+    name: "IPv4 租約有效秒數"
+    description: "預設 86400（即 24 小時）"
+  enable_dhcp6:
+    name: "啟用 DHCPv6 服務"
+    description: "開啟後將同時分發 IPv6 位址"
+  subnet6:
+    name: "IPv6 網段 (CIDR)"
+    description: "例如：fd00::/64 或 2001:db8:1::/64"
+  pool6_start:
+    name: "IPv6 動態發放起始 IP"
+    description: "例如：fd00::1000"
+  pool6_end:
+    name: "IPv6 動態發放結束 IP"
+    description: "例如：fd00::2000"
+  dns6:
+    name: "IPv6 DNS 伺服器"
+    description: "以逗號分隔，例如：2606:4700:4700::1111, 2001:4860:4860::8888"
+  lease_time6:
+    name: "IPv6 租約有效秒數"
+    description: "預設 86400（即 24 小時）"
