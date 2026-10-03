@@ -9,7 +9,7 @@
 
 | 層級 | 放哪裡 | 內容 |
 |---|---|---|
-| 部署層級 | HA App 設定頁（`options`/`schema`） | `interface`、`enable_dhcp6`（必要時加日誌等級） |
+| 部署層級 | HA App 設定頁（`options`/`schema`） | `interface`、`enable_dhcp6`——**僅作初始預設值**（v2.1.0 起改由 Web UI 的 Settings 分頁管理，存於 `settings.json` 的 `global`） |
 | 營運層級 | Web UI（Ingress） | 多個 IPv4/IPv6 網段、Pool、Gateway、DNS、租約時間、靜態 IP 綁定、租約列表、服務狀態 |
 
 - Web UI 的設定存放於 `/config/kea/settings.json`，重啟後保留。
@@ -34,21 +34,28 @@
 - Kea 3.0 設定使用 `output-options`（`output_options` 已棄用）。
 - `host_network: true` 下 Ingress 的來源 IP 假設為 `172.30.32.2`，**尚未在真實 HA 驗證**。
 
-## 5. 進度
+## 5. 進度（v2.1.0）
 
 | 項目 | 狀態 |
 |---|---|
-| `kea/app/settings.py`（驗證與設定檔渲染） | ✅ 完成，已有單元測試 |
-| `kea/app/leases.py`（租約 CSV 讀取） | ✅ 完成，已有單元測試 |
-| `kea/app/manager.py`（行程管理） | ✅ 完成，以假 Kea 腳本測試 |
-| `kea/app/server.py`（FastAPI） | ✅ 完成，TestClient 測試 + 本機實跑 |
-| `kea/app/static/index.html`（前端） | ✅ 完成，瀏覽器實測（編輯、錯誤顯示、儲存、租約、XSS） |
-| `config.yaml` / `translations` / `Dockerfile` / `run.sh` | ✅ 已改為 Ingress 版（v2.0.0） |
-| README | ✅ 已更新 |
+| 多網段、多 Pool、靜態綁定、租約列表、服務狀態 | ✅ 完成，單元測試 + 瀏覽器實測 |
+| 進階選項：domain name、search domains、NTP、自訂 option | ✅ 完成（自訂 option 的語意由 `kea -t` 把關） |
+| DHCPv6 prefix delegation pools | ✅ 完成 |
+| 租約：搜尋、排序、一鍵轉靜態綁定、刪除租約 | ✅ 完成 |
+| Web UI 內檢視日誌（擷取 daemon stdout，環形緩衝 3000 行，同時仍轉印到 HA 日誌） | ✅ 完成 |
+| 設定匯出 / 匯入（匯入只載入編輯器、不直接套用；v1 格式自動遷移） | ✅ 完成 |
+| 套用設定改為 SIGHUP 熱重載（網卡變更、daemon 未執行、啟停 DHCPv6 才重啟） | ✅ 完成，假 daemon 驗證 |
+| Web UI 內修改網卡與 DHCPv6 開關 | ✅ 完成（HA options 降為初始預設值） |
 | 映像 build、真實 Kea 3.0.x、真實 HA Ingress | ⬜ 未驗證（本機無 Docker / Kea） |
+
+### 設定檔 schema
+- v1：每網段單一 `pool_start`/`pool_end`，無 `global`。
+- v2：`pools` 清單、`domain_name`/`domain_search`/`ntp_servers`/`custom_options`、v6 的 `pd_pools`、`global`（`interface`、`enable_dhcp6`）。讀取時自動由 v1 遷移。
 
 ## 6. 未驗證的風險
 - 尚未 build 映像：Alpine 3.24 上 pip 安裝 `fastapi`/`pydantic-core` 是否有可用的 musllinux wheel、`kea-dhcp4`/`kea-dhcp6` 套件名稱與版本，皆待確認。
-- 尚未在真實 Kea 3.0.x 上跑：Kea 3.0 路徑限制（`KEA_LEASE_DIR` 等環境變數）、`output-options`、`kea -t` 對渲染出的設定是否通過，只有假腳本測過流程。
+- 尚未在真實 Kea 3.0.x 上跑：路徑限制（`KEA_LEASE_DIR` 等環境變數）、`output-options`、渲染出的設定（含多 Pool、`pd-pools`、`ntp-servers`、`domain-search`、自訂 option）是否通過 `kea -t`，只有假腳本測過流程。
+- **SIGHUP 熱重載**：假 daemon 驗證了「訊號有送到、PID 不變」，但真實 Kea 收到 SIGHUP 後是否如預期重新讀取設定、失敗時是否保留舊設定，尚待實測。
+- **刪除租約**：依 Kea memfile 慣例（同位址以最後一列為準、`valid_lifetime=0` 代表已刪除）在 daemon 停止時追加一列；此語意依文件與記憶撰寫，未用真實 Kea 驗證。若 Kea 在 LFC 進行中被停止，檔案狀態亦未測。
 - Ingress 在 `host_network` 下的來源 IP 是否為 `172.30.32.2`（可用環境變數 `KEA_UI_ALLOWED` 調整；被擋時畫面會顯示 `forbidden (<ip>)`）。
 - 預設範例網段 `192.168.1.0/24` 會在首次啟動就生效。

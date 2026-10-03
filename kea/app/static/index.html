@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,7 +8,7 @@
   :root {
     --bg: #f4f5f7; --card: #fff; --fg: #1c1c1e; --muted: #6b7280; --line: #e2e5ea;
     --accent: #03a9f4; --accent-fg: #fff; --danger: #d32f2f; --ok: #2e7d32; --warn: #ed6c02;
-    --input-bg: #fff; --err-bg: #fdecea; --warn-bg: #fff4e5;
+    --input-bg: #fff; --err-bg: #fdecea; --warn-bg: #fff4e5; --log-bg: #0f1115; --log-fg: #d6dae0;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -22,35 +22,43 @@
   main { max-width: 1000px; margin: 0 auto; padding: 16px; }
   h1 { font-size: 20px; margin: 0 0 12px; }
   h3 { margin: 0; font-size: 15px; }
+  h4 { margin: 14px 0 4px; font-size: 13px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
           padding: 14px 16px; margin-bottom: 14px; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .grow { flex: 1; }
   .muted { color: var(--muted); }
+  .small { font-size: 12px; }
   .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px;
           border: 1px solid var(--line); font-size: 13px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.up { background: var(--ok); } .dot.down { background: var(--danger); }
-  button { font: inherit; cursor: pointer; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
-           background: var(--card); color: var(--fg); }
-  button:hover { border-color: var(--accent); }
+  button, .btn { font: inherit; cursor: pointer; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--card); color: var(--fg); text-decoration: none; display: inline-block; }
+  button:hover, .btn:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
   button.danger { color: var(--danger); }
+  button.sm { padding: 2px 10px; font-size: 12px; }
   button:disabled { opacity: .5; cursor: default; }
-  nav { display: flex; gap: 4px; margin: 14px 0; border-bottom: 1px solid var(--line); }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0; border-bottom: 1px solid var(--line); }
   nav button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 8px 16px; }
   nav button.active { border-bottom-color: var(--accent); font-weight: 600; }
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
-  input { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  input, select { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
           background: var(--input-bg); color: var(--fg); }
-  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type=checkbox] { width: auto; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 12px 0; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--fg); margin: 0; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--accent); }
   td input { min-width: 110px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
   .scroll { overflow-x: auto; }
+  .nowrap { white-space: nowrap; }
   .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; white-space: pre-wrap; }
   .banner.err { background: var(--err-bg); border: 1px solid var(--danger); }
   .banner.warn { background: var(--warn-bg); border: 1px solid var(--warn); }
@@ -58,6 +66,16 @@
   .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line);
              display: flex; gap: 10px; align-items: center; }
   .empty { padding: 16px; text-align: center; color: var(--muted); }
+  details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  summary { cursor: pointer; font-weight: 600; }
+  .logbox { background: var(--log-bg); color: var(--log-fg); border-radius: 8px; padding: 10px; height: 460px;
+            overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
+            word-break: break-all; }
+  .logbox .err { color: #ff8a80; } .logbox .warn { color: #ffcc80; } .logbox .src { color: #7fb7ff; }
+  .toast { position: fixed; left: 50%; bottom: 70px; transform: translateX(-50%); max-width: 90vw;
+           background: #323232; color: #fff; padding: 10px 18px; border-radius: 8px; z-index: 10;
+           box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+  .toast.err { background: var(--danger); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -70,22 +88,28 @@
   <nav id="tabs"></nav>
   <section id="view"></section>
   <div class="savebar" id="savebar" hidden>
-    <button class="primary" id="save">儲存並套用</button>
-    <button id="discard">放棄變更</button>
-    <span class="muted" id="savemsg">有尚未儲存的變更</span>
+    <button class="primary" id="save">Save &amp; apply</button>
+    <button id="discard">Discard changes</button>
+    <span class="muted" id="savemsg">You have unsaved changes</span>
   </div>
 </main>
+<div class="toast" id="toast" hidden></div>
 
 <script>
 "use strict";
 // All URLs are relative (no leading slash) so the page works under HA Ingress.
 const API = (p) => "api/" + p;
-const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "租約"]];
+const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "Leases"], ["logs", "Logs"], ["settings", "Settings"]];
+const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6"], ["addon", "Add-on"]];
+const MAX_LOG_LINES = 1500;
 
-let state = { status: null, saved: null, draft: null, leases: null };
+let state = { status: null, saved: null, draft: null, leases: null, interfaces: null };
 let tab = "dhcp4";
 let dirty = false;
 let busy = false;
+const adv = {};                                   // which "advanced options" sections are open
+const leaseView = { filter: "", key: "address", dir: 1 };
+const logView = { source: "", since: 0, lines: [], auto: true, filter: "" };
 
 // ------------------------------------------------------------- DOM helper
 // Text is always set through textContent / properties, never innerHTML:
@@ -108,12 +132,13 @@ function h(tag, attrs, ...kids) {
 async function api(path, opts) {
   let res;
   try { res = await fetch(API(path), opts); }
-  catch (e) { throw { errors: ["無法連線到 Add-on:" + e.message] }; }
+  catch (e) { throw { errors: ["Cannot reach the add-on: " + e.message] }; }
   let body = null;
   try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
   if (!res.ok) {
     const errors = (body && body.errors) || (body && body.error && [body.error]) ||
-                   (body && body.detail && [JSON.stringify(body.detail)]) || ["HTTP " + res.status];
+                   (body && body.detail && [typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)]) ||
+                   ["HTTP " + res.status];
     throw { errors };
   }
   return body;
@@ -122,183 +147,384 @@ const sendJSON = (method, path, data) => api(path, {
   method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data || {}),
 });
 
-// ------------------------------------------------------------- banners
+// ------------------------------------------------------------- feedback
 function showErrors(errors, kind) {
   const box = document.getElementById("banner");
   box.replaceChildren();
   if (!errors || !errors.length) return;
   box.append(h("div", { class: "banner " + (kind || "err") },
-    kind === "warn" ? "注意" : "設定未套用", h("ul", {}, errors.map((e) => h("li", {}, e)))));
+    kind === "warn" ? "Notice" : "Request failed", h("ul", {}, errors.map((e) => h("li", {}, e)))));
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+let toastTimer = null;
+function toast(message, kind) {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.className = "toast" + (kind === "err" ? " err" : "");
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+}
+
 // ------------------------------------------------------------- draft model
+const LIST_FIELDS = ["dns", "domain_search", "ntp_servers"];   // edited as comma separated text
+
 function toDraft(settings) {
   const d = JSON.parse(JSON.stringify(settings));
-  for (const fam of ["dhcp4", "dhcp6"])
-    for (const s of d[fam].subnets) s.dns = (s.dns || []).join(", ");
+  d.global = d.global || { interface: "eth0", enable_dhcp6: false };
+  for (const fam of ["dhcp4", "dhcp6"]) {
+    d[fam] = d[fam] || { subnets: [] };
+    for (const s of d[fam].subnets) {
+      for (const f of LIST_FIELDS) if (Array.isArray(s[f])) s[f] = s[f].join(", ");
+      s.pools = s.pools || [];
+      s.custom_options = s.custom_options || [];
+      s.reservations = s.reservations || [];
+      if (fam === "dhcp6") s.pd_pools = s.pd_pools || [];
+    }
+  }
   return d;
 }
-function markDirty() {
-  dirty = true;
-  document.getElementById("savebar").hidden = false;
-}
-function clearDirty() {
-  dirty = false;
-  document.getElementById("savebar").hidden = true;
-}
+function markDirty() { dirty = true; document.getElementById("savebar").hidden = false; }
+function clearDirty() { dirty = false; document.getElementById("savebar").hidden = true; }
 
-// ------------------------------------------------------------- rendering
+// ------------------------------------------------------------- formatting
 function fmtDuration(sec) {
   if (sec == null) return "";
-  if (sec < 60) return sec + " 秒";
-  if (sec < 3600) return Math.floor(sec / 60) + " 分";
-  if (sec < 86400) return Math.floor(sec / 3600) + " 時 " + Math.floor((sec % 3600) / 60) + " 分";
-  return Math.floor(sec / 86400) + " 天 " + Math.floor((sec % 86400) / 3600) + " 時";
+  if (sec < 60) return sec + " s";
+  if (sec < 3600) return Math.floor(sec / 60) + " min";
+  if (sec < 86400) return Math.floor(sec / 3600) + " h " + Math.floor((sec % 3600) / 60) + " min";
+  return Math.floor(sec / 86400) + " d " + Math.floor((sec % 86400) / 3600) + " h";
 }
 
+// ------------------------------------------------------------- status + tabs
 function renderStatus() {
   const bar = document.getElementById("statusbar");
   bar.replaceChildren();
   const st = state.status;
   if (!st) return;
-  bar.append(h("span", { class: "muted" }, "網卡:"), h("b", {}, st.interface));
+  bar.append(h("span", { class: "muted" }, "Interface:"), h("b", {}, st.interface));
   for (const [key, label] of [["dhcp4", "DHCPv4"], ["dhcp6", "DHCPv6"]]) {
     const d = st.daemons[key];
     let text, cls = "";
-    if (!d.enabled) text = "已停用";
-    else if (!d.installed) text = "未安裝";
-    else if (d.running) { text = "執行中"; cls = "up"; }
-    else { text = d.exit_code != null ? "已停止 (exit " + d.exit_code + ")" : "未執行"; cls = "down"; }
-    bar.append(h("span", { class: "pill" }, h("span", { class: "dot " + cls }), label + ":" + text));
+    if (!d.enabled) text = "disabled";
+    else if (!d.installed) text = "not installed";
+    else if (d.running) { text = "running"; cls = "up"; }
+    else { text = d.exit_code != null ? "stopped (exit " + d.exit_code + ")" : "not running"; cls = "down"; }
+    bar.append(h("span", { class: "pill" }, h("span", { class: "dot " + cls }), label + ": " + text));
   }
   bar.append(h("span", { class: "grow" }),
-    h("button", { onclick: onRestart, disabled: busy }, "重新啟動 Kea"));
+    h("button", { onclick: onRestart, disabled: busy }, "Restart Kea"));
   // Daemon problems live in their own box so the 5s status refresh never
   // overwrites (or scrolls away from) validation errors from a save attempt.
   const kerr = document.getElementById("kerr");
   kerr.replaceChildren();
   if (st.last_error)
-    kerr.append(h("div", { class: "banner err" }, "Kea 狀態異常\n" + st.last_error));
+    kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }
 
 function renderTabs() {
-  const nav = document.getElementById("tabs");
-  nav.replaceChildren(...TABS.map(([id, label]) =>
-    h("button", { class: id === tab ? "active" : "", onclick: () => { tab = id; renderTabs(); renderView(); } }, label)));
+  document.getElementById("tabs").replaceChildren(...TABS.map(([id, label]) =>
+    h("button", { class: id === tab ? "active" : "", onclick: () => switchTab(id) }, label)));
+}
+function switchTab(id) { tab = id; renderTabs(); renderView(); }
+
+// ------------------------------------------------------------- form widgets
+function textInput(obj, key, opts) {
+  return h("input", Object.assign({
+    value: obj[key] == null ? "" : obj[key], autocomplete: "off", spellcheck: "false",
+    oninput: (e) => { obj[key] = e.target.value; markDirty(); } }, opts || {}));
+}
+function field(label, obj, key, opts) { return h("div", {}, h("label", {}, label), textInput(obj, key, opts)); }
+function delButton(onclick) { return h("button", { class: "danger sm", onclick }, "Delete"); }
+function addButton(label, onclick) { return h("p", {}, h("button", { class: "sm", onclick }, label)); }
+function tableOf(headers, rows, emptyText) {
+  return h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, headers.map((t) => h("th", {}, t)))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: headers.length, class: "muted" }, emptyText)))));
+}
+function rerender(fn) { return () => { fn(); markDirty(); renderView(); }; }
+
+// ------------------------------------------------------------- subnet editor
+function poolsEditor(s) {
+  const rows = s.pools.map((p, i) => h("tr", {},
+    h("td", {}, textInput(p, "start", { class: "mono" })),
+    h("td", {}, textInput(p, "end", { class: "mono" })),
+    h("td", {}, delButton(rerender(() => s.pools.splice(i, 1))))));
+  return [h("h4", {}, "Address pools"),
+          tableOf(["Start IP", "End IP", ""], rows, "No pools (only reservations will be served)"),
+          addButton("+ Add pool", rerender(() => s.pools.push({ start: "", end: "" })))];
 }
 
-function field(label, obj, key, opts) {
-  const input = h("input", Object.assign({ value: obj[key] == null ? "" : obj[key], autocomplete: "off",
-    spellcheck: "false", oninput: (e) => { obj[key] = e.target.value; markDirty(); } }, opts || {}));
-  return h("div", {}, h("label", {}, label), input);
+function reservationsEditor(fam, s) {
+  const v4 = fam === "dhcp4", idKey = v4 ? "hw_address" : "duid";
+  const rows = s.reservations.map((r, i) => h("tr", {},
+    h("td", {}, textInput(r, idKey, { class: "mono", placeholder: v4 ? "aa:bb:cc:dd:ee:ff" : "00:01:00:01:..." })),
+    h("td", {}, textInput(r, "ip_address", { class: "mono" })),
+    h("td", {}, textInput(r, "hostname")),
+    h("td", {}, delButton(rerender(() => s.reservations.splice(i, 1))))));
+  return [h("h4", {}, "Reservations"),
+          tableOf([v4 ? "MAC address" : "DUID", "Reserved IP", "Hostname (optional)", ""], rows, "No reservations yet"),
+          addButton("+ Add reservation", rerender(() => s.reservations.push({ [idKey]: "", ip_address: "", hostname: "" })))];
+}
+
+function advancedEditor(fam, s, key) {
+  const v4 = fam === "dhcp4";
+  const fields = [];
+  if (v4) fields.push(field("Domain name", s, "domain_name", { placeholder: "home.lan" }));
+  fields.push(field("Search domains (comma separated)", s, "domain_search", { placeholder: "home.lan, lan" }));
+  if (v4) fields.push(field("NTP servers (comma separated)", s, "ntp_servers", { placeholder: "192.168.1.2" }));
+
+  const optRows = s.custom_options.map((o, i) => h("tr", {},
+    h("td", {}, textInput(o, "name", { class: "mono", placeholder: "tftp-server-name" })),
+    h("td", {}, textInput(o, "data", { class: "mono" })),
+    h("td", {}, delButton(rerender(() => s.custom_options.splice(i, 1))))));
+  const parts = [h("div", { class: "fields" }, fields),
+    h("h4", {}, "Custom DHCP options"),
+    h("div", { class: "muted small" }, "Kea option names (e.g. tftp-server-name, boot-file-name). Kea checks them when you apply."),
+    tableOf(["Option name", "Data", ""], optRows, "No custom options"),
+    addButton("+ Add option", rerender(() => s.custom_options.push({ name: "", data: "" })))];
+
+  if (!v4) {
+    const pdRows = s.pd_pools.map((p, i) => h("tr", {},
+      h("td", {}, textInput(p, "prefix", { class: "mono", placeholder: "2001:db8:1::" })),
+      h("td", {}, textInput(p, "prefix_len", { inputmode: "numeric", placeholder: "48" })),
+      h("td", {}, textInput(p, "delegated_len", { inputmode: "numeric", placeholder: "64" })),
+      h("td", {}, delButton(rerender(() => s.pd_pools.splice(i, 1))))));
+    parts.push(h("h4", {}, "Prefix delegation pools"),
+      tableOf(["Prefix", "Prefix length", "Delegated length", ""], pdRows, "No prefix delegation"),
+      addButton("+ Add prefix pool", rerender(() => s.pd_pools.push({ prefix: "", prefix_len: "", delegated_len: "" }))));
+  }
+  return h("details", { open: !!adv[key], ontoggle: (e) => { adv[key] = e.target.open; } },
+    h("summary", {}, "Advanced options"), parts);
 }
 
 function subnetCard(fam, subnets, idx) {
   const v4 = fam === "dhcp4";
   const s = subnets[idx];
-  const fields = [
-    field("網段 (CIDR)", s, "subnet", { placeholder: v4 ? "192.168.1.0/24" : "fd00::/64" }),
-    field("Pool 起始 IP", s, "pool_start", { placeholder: v4 ? "192.168.1.100" : "fd00::1000" }),
-    field("Pool 結束 IP", s, "pool_end", { placeholder: v4 ? "192.168.1.200" : "fd00::2000" }),
-  ];
-  if (v4) fields.push(field("預設閘道", s, "router", { placeholder: "192.168.1.1" }));
-  fields.push(field("DNS(逗號分隔)", s, "dns"),
-              field("租約秒數", s, "lease_time", { inputmode: "numeric" }));
-
-  const idLabel = v4 ? "MAC 位址" : "DUID";
-  const idKey = v4 ? "hw_address" : "duid";
-  const resRows = (s.reservations || []).map((r, ri) => h("tr", {},
-    h("td", {}, h("input", { class: "mono", value: r[idKey] || "", oninput: (e) => { r[idKey] = e.target.value; markDirty(); },
-                              placeholder: v4 ? "aa:bb:cc:dd:ee:ff" : "00:01:00:01:..." })),
-    h("td", {}, h("input", { class: "mono", value: r.ip_address || "", oninput: (e) => { r.ip_address = e.target.value; markDirty(); } })),
-    h("td", {}, h("input", { value: r.hostname || "", oninput: (e) => { r.hostname = e.target.value; markDirty(); } })),
-    h("td", {}, h("button", { class: "danger", onclick: () => { s.reservations.splice(ri, 1); markDirty(); renderView(); } }, "刪除"))));
-
+  const fields = [field("Subnet (CIDR)", s, "subnet", { placeholder: v4 ? "192.168.1.0/24" : "fd00::/64" })];
+  if (v4) fields.push(field("Default gateway", s, "router", { placeholder: "192.168.1.1" }));
+  fields.push(field("DNS servers (comma separated)", s, "dns"),
+              field("Lease time (seconds)", s, "lease_time", { inputmode: "numeric" }));
   return h("div", { class: "card" },
     h("div", { class: "row" },
-      h("h3", { class: "grow" }, "網段 #" + (idx + 1) + (s.subnet ? "  " + s.subnet : "")),
+      h("h3", { class: "grow" }, "Subnet #" + (idx + 1) + (s.subnet ? "  " + s.subnet : "")),
       h("button", { class: "danger", onclick: () => {
-        if (!confirm("刪除這個網段(含其靜態綁定)?")) return;
-        subnets.splice(idx, 1); markDirty(); renderView(); } }, "刪除網段")),
+        if (!confirm("Delete this subnet (including its reservations)?")) return;
+        subnets.splice(idx, 1); markDirty(); renderView(); } }, "Delete subnet")),
     h("div", { class: "fields" }, fields),
-    h("h3", {}, "靜態綁定"),
-    h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, idLabel), h("th", {}, "固定 IP"), h("th", {}, "主機名稱(選填)"), h("th", {}))),
-      h("tbody", {}, resRows.length ? resRows
-        : h("tr", {}, h("td", { colspan: 4, class: "muted" }, "尚無靜態綁定"))))),
-    h("p", {}, h("button", { onclick: () => {
-      (s.reservations = s.reservations || []).push({ [idKey]: "", ip_address: "", hostname: "" });
-      markDirty(); renderView(); } }, "+ 新增靜態綁定")));
+    poolsEditor(s), reservationsEditor(fam, s), advancedEditor(fam, s, fam + ":" + idx));
 }
 
 function renderFamily(fam) {
-  const view = document.getElementById("view");
   const subnets = state.draft[fam].subnets;
   const nodes = [];
   if (fam === "dhcp6" && state.status && !state.status.enable_dhcp6)
     nodes.push(h("div", { class: "banner warn" },
-      "DHCPv6 目前在 Add-on 設定頁中為停用狀態,此處的 IPv6 設定會被儲存但不會生效。請到「設定」頁開啟 enable_dhcp6 後重新啟動 Add-on。"));
+      "DHCPv6 is turned off. IPv6 settings are saved but nothing is served until you enable DHCPv6 in the Settings tab."));
   subnets.forEach((_, i) => nodes.push(subnetCard(fam, subnets, i)));
-  if (!subnets.length) nodes.push(h("div", { class: "card empty" }, "尚未設定任何網段。Kea 在沒有網段時不會發放位址。"));
+  if (!subnets.length) nodes.push(h("div", { class: "card empty" }, "No subnets configured. Kea will not hand out addresses without a subnet."));
   nodes.push(h("p", {}, h("button", { onclick: () => {
-    subnets.push(Object.assign({ id: null, subnet: "", pool_start: "", pool_end: "", dns: "", lease_time: 86400, reservations: [] },
-                               fam === "dhcp4" ? { router: "" } : {}));
-    markDirty(); renderView(); } }, "+ 新增網段")));
-  view.replaceChildren(...nodes);
+    subnets.push(Object.assign({ id: null, subnet: "", pools: [{ start: "", end: "" }], dns: "", domain_search: "",
+        custom_options: [], lease_time: 86400, reservations: [] },
+      fam === "dhcp4" ? { router: "", domain_name: "", ntp_servers: "" } : { pd_pools: [] }));
+    markDirty(); renderView(); } }, "+ Add subnet")));
+  document.getElementById("view").replaceChildren(...nodes);
 }
 
-function leaseTable(title, rows, idLabel) {
+// ------------------------------------------------------------- leases
+function leaseCompare(a, b) {
+  const k = leaseView.key;
+  let x = a[k], y = b[k];
+  if (k === "address") { x = a._i; y = b._i; }            // server already sorts addresses numerically
+  if (typeof x === "string" || typeof y === "string") return String(x || "").localeCompare(String(y || ""), undefined, { numeric: true }) * leaseView.dir;
+  return ((x == null ? -1 : x) - (y == null ? -1 : y)) * leaseView.dir;
+}
+
+function leaseTable(fam, title, all, idLabel) {
+  const q = leaseView.filter.trim().toLowerCase();
+  const rows = all.map((l, i) => Object.assign({ _i: i }, l))
+    .filter((l) => !q || [l.address, l.identifier, l.hostname].some((t) => (t || "").toLowerCase().includes(q)))
+    .sort(leaseCompare);
+  const head = (label, key) => h("th", { class: "sortable", onclick: () => {
+    leaseView.dir = leaseView.key === key ? -leaseView.dir : 1; leaseView.key = key; renderLeaseTables(); } },
+    label + (leaseView.key === key ? (leaseView.dir > 0 ? " ▲" : " ▼") : ""));
   return h("div", { class: "card" },
-    h("h3", {}, title + "(" + rows.length + ")"),
+    h("h3", {}, title + " (" + rows.length + (rows.length !== all.length ? " of " + all.length : "") + ")"),
     h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "IP 位址"), h("th", {}, idLabel), h("th", {}, "主機名稱"),
-                       h("th", {}, "網段 ID"), h("th", {}, "剩餘租期"))),
+      h("thead", {}, h("tr", {}, head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
+                       head("Subnet ID", "subnet_id"), head("Time left", "remaining"), h("th", {}))),
       h("tbody", {}, rows.length ? rows.map((l) => h("tr", {},
         h("td", { class: "mono" }, l.address), h("td", { class: "mono" }, l.identifier),
         h("td", {}, l.hostname || "—"), h("td", {}, l.subnet_id == null ? "—" : l.subnet_id),
-        h("td", {}, fmtDuration(l.remaining))))
-        : h("tr", {}, h("td", { colspan: 5, class: "muted" }, "目前沒有有效租約"))))));
+        h("td", { class: "nowrap" }, fmtDuration(l.remaining)),
+        h("td", { class: "nowrap" },
+          h("button", { class: "sm", title: "Add a static reservation for this device", onclick: () => makeStatic(fam, l) }, "Reserve"), " ",
+          h("button", { class: "sm danger", onclick: () => deleteLease(fam, l) }, "Delete"))))
+        : h("tr", {}, h("td", { colspan: 6, class: "muted" }, q ? "No leases match the filter" : "No active leases"))))));
+}
+
+function renderLeaseTables() {
+  const box = document.getElementById("leasetables");
+  if (!box) return;
+  const L = state.leases;
+  if (!L) { box.replaceChildren(h("div", { class: "empty" }, "Loading…")); return; }
+  const nodes = [leaseTable("dhcp4", "IPv4 leases", L.dhcp4, "MAC address")];
+  if (state.status && state.status.enable_dhcp6) nodes.push(leaseTable("dhcp6", "IPv6 leases", L.dhcp6, "DUID"));
+  box.replaceChildren(...nodes);
 }
 
 function renderLeases() {
-  const view = document.getElementById("view");
-  const L = state.leases;
-  const nodes = [h("p", {}, h("button", { onclick: loadLeases }, "重新整理"))];
-  if (!L) nodes.push(h("div", { class: "empty" }, "載入中…"));
-  else {
-    nodes.push(leaseTable("IPv4 租約", L.dhcp4, "MAC 位址"));
-    if (state.status && state.status.enable_dhcp6) nodes.push(leaseTable("IPv6 租約", L.dhcp6, "DUID"));
-  }
-  view.replaceChildren(...nodes);
+  document.getElementById("view").replaceChildren(
+    h("div", { class: "row", style: "margin-bottom:12px" },
+      h("button", { onclick: loadLeases }, "Refresh"),
+      h("input", { placeholder: "Filter by IP, MAC / DUID or hostname", value: leaseView.filter, style: "max-width:340px",
+        oninput: (e) => { leaseView.filter = e.target.value; renderLeaseTables(); } })),
+    h("div", { id: "leasetables" }));
+  renderLeaseTables();
 }
 
+function makeStatic(fam, lease) {
+  const sub = state.draft[fam].subnets.find((s) => s.id === lease.subnet_id);
+  if (!sub) { toast("Subnet " + lease.subnet_id + " is not in the editor (was it deleted or not saved yet?)", "err"); return; }
+  const key = fam === "dhcp4" ? "hw_address" : "duid";
+  if (sub.reservations.some((r) => r[key] === lease.identifier || r.ip_address === lease.address)) {
+    toast("This device or address already has a reservation", "err"); return;
+  }
+  sub.reservations.push({ [key]: lease.identifier, ip_address: lease.address, hostname: (lease.hostname || "").replace(/\.$/, "") });
+  markDirty();
+  switchTab(fam);
+  toast("Reservation added to the editor. Review it, then click Save & apply.");
+}
+
+async function deleteLease(fam, lease) {
+  if (!confirm("Delete the lease for " + lease.address + "?\n\nKea is briefly stopped while the lease file is edited. The client keeps working until its lease runs out, then asks again.")) return;
+  await setBusy(true);
+  try { await sendJSON("DELETE", "leases/" + fam + "/" + encodeURIComponent(lease.address)); toast("Lease deleted"); }
+  catch (e) { showErrors(e.errors); }
+  await setBusy(false);
+  await loadLeases(); refreshStatus();
+}
+
+// ------------------------------------------------------------- logs
+function logLine(e) {
+  const src = { dhcp4: "v4", dhcp6: "v6", addon: "add-on" }[e.source] || e.source;
+  const cls = /\b(ERROR|FATAL)\b/.test(e.line) ? "err" : /\bWARN/.test(e.line) ? "warn" : "";
+  return h("div", { class: cls }, h("span", { class: "src" }, "[" + src + "] "), e.line);
+}
+function logVisible(e) { return !logView.filter || e.line.toLowerCase().includes(logView.filter.toLowerCase()); }
+
+function fillLogBox() {
+  const box = document.getElementById("logbox");
+  if (!box) return;
+  const lines = logView.lines.filter(logVisible);
+  box.replaceChildren(...(lines.length ? lines.map(logLine) : [h("div", { class: "muted" }, "No log lines yet")]));
+  box.scrollTop = box.scrollHeight;
+}
+
+async function pollLogs(reset) {
+  if (reset) { logView.since = 0; logView.lines = []; }
+  let data;
+  try { data = await api("logs?since=" + logView.since + "&source=" + encodeURIComponent(logView.source) + "&limit=500"); }
+  catch (e) { return; }
+  logView.since = data.last_seq;
+  if (!data.entries.length && !reset) return;
+  const box = document.getElementById("logbox");
+  const atBottom = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  logView.lines = logView.lines.concat(data.entries).slice(-MAX_LOG_LINES);
+  if (!box) return;
+  if (reset || !box.querySelector("div:not(.muted)")) { fillLogBox(); return; }
+  for (const e of data.entries.filter(logVisible)) box.append(logLine(e));
+  while (box.childElementCount > MAX_LOG_LINES) box.firstChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function renderLogs() {
+  document.getElementById("view").replaceChildren(
+    h("div", { class: "row", style: "margin-bottom:12px" },
+      h("select", { style: "width:auto", onchange: (e) => { logView.source = e.target.value; pollLogs(true); } },
+        LOG_SOURCES.map(([v, t]) => h("option", Object.assign({ value: v }, v === logView.source ? { selected: true } : {}), t))),
+      h("input", { placeholder: "Filter text", value: logView.filter, style: "max-width:240px",
+        oninput: (e) => { logView.filter = e.target.value; fillLogBox(); } }),
+      h("label", { class: "check" },
+        h("input", Object.assign({ type: "checkbox", onchange: (e) => { logView.auto = e.target.checked; } }, logView.auto ? { checked: true } : {})),
+        "Auto-refresh"),
+      h("button", { onclick: () => { logView.lines = []; fillLogBox(); } }, "Clear view"),
+      h("span", { class: "grow" }),
+      h("span", { class: "muted small" }, "Last " + MAX_LOG_LINES + " lines are kept in memory")),
+    h("div", { class: "logbox", id: "logbox" }));
+  fillLogBox();
+  pollLogs(true);
+}
+
+// ------------------------------------------------------------- settings tab
+function renderSettings() {
+  const g = state.draft.global;
+  const ifaces = (state.interfaces && state.interfaces.interfaces) || [];
+  const def = state.interfaces && state.interfaces.default;
+  document.getElementById("view").replaceChildren(
+    h("div", { class: "card" },
+      h("h3", {}, "General"),
+      h("div", { class: "fields" },
+        h("div", {}, h("label", {}, "Network interface"),
+          textInput(g, "interface", { list: "ifaces", placeholder: "eth0" }),
+          h("datalist", { id: "ifaces" }, ifaces.map((n) => h("option", { value: n }))),
+          h("div", { class: "muted small" },
+            ifaces.length ? "Detected: " + ifaces.join(", ") + (def ? " (default route: " + def + ")" : "") : "No interfaces detected")),
+        h("div", {}, h("label", {}, "DHCPv6"),
+          h("label", { class: "check" },
+            h("input", Object.assign({ type: "checkbox", onchange: (e) => { g.enable_dhcp6 = e.target.checked; markDirty(); } },
+              g.enable_dhcp6 ? { checked: true } : {})), "Enable DHCPv6 server"))),
+      h("div", { class: "muted small" }, "Changing the interface restarts Kea. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the add-on Configuration tab are only the initial defaults.")),
+    h("div", { class: "card" },
+      h("h3", {}, "Backup & restore"),
+      h("p", { class: "muted" }, "Export downloads the saved settings. Import loads a settings file into the editor so you can review it; nothing changes until you click Save & apply."),
+      h("div", { class: "row" },
+        h("a", { class: "btn", href: "api/backup", download: "kea-settings.json" }, "Export settings"),
+        h("label", { class: "btn", style: "margin:0;color:var(--fg);font-size:14px" }, "Import settings…",
+          h("input", { type: "file", accept: "application/json,.json", hidden: true, onchange: onImport })))));
+}
+
+async function onImport(e) {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  showErrors(null);
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); }
+  catch (err) { showErrors(["The file is not valid JSON"]); return; }
+  try {
+    const res = await sendJSON("POST", "import", parsed);
+    state.draft = toDraft(res.settings);
+    markDirty(); renderView();
+    toast("Settings loaded into the editor. Review them, then click Save & apply.");
+  } catch (err) { showErrors(err.errors); }
+}
+
+// ------------------------------------------------------------- view dispatch
 function renderView() {
   if (!state.draft) return;
-  if (tab === "leases") renderLeases(); else renderFamily(tab);
+  if (tab === "leases") renderLeases();
+  else if (tab === "logs") renderLogs();
+  else if (tab === "settings") renderSettings();
+  else renderFamily(tab);
 }
 
 // ------------------------------------------------------------- actions
-function payload() {
-  // dns stays a string; the server accepts comma/space separated text.
-  return JSON.parse(JSON.stringify(state.draft));
-}
-
 async function loadAll() {
   const data = await api("state");
   state.status = data.status;
   state.saved = data.settings;
-  if (!dirty) { state.draft = toDraft(data.settings); }
+  if (!dirty) state.draft = toDraft(data.settings);
   renderStatus(); renderView();
 }
 async function loadLeases() {
-  try { state.leases = await api("leases"); } catch (e) { showErrors(e.errors, "err"); }
-  if (tab === "leases") renderLeases();
+  try { state.leases = await api("leases"); } catch (e) { showErrors(e.errors); }
+  renderLeaseTables();
 }
 async function refreshStatus() {
   try { state.status = await api("status"); renderStatus(); } catch (e) { /* transient */ }
 }
-
 async function setBusy(on) {
   busy = on;
   for (const b of document.querySelectorAll("button")) b.disabled = on;
@@ -308,24 +534,26 @@ document.getElementById("save").addEventListener("click", async () => {
   showErrors(null);
   await setBusy(true);
   try {
-    const res = await sendJSON("PUT", "settings", payload());
+    const res = await sendJSON("PUT", "settings", state.draft);
     state.saved = res.settings; state.draft = toDraft(res.settings); state.status = res.status;
     clearDirty();
+    toast(res.action === "reloaded" ? "Applied. Kea reloaded its configuration without restarting."
+                                    : "Applied. Kea was restarted.");
   } catch (e) { showErrors(e.errors); }
   await setBusy(false);
   renderStatus(); renderView();
 });
 
 document.getElementById("discard").addEventListener("click", () => {
-  if (!confirm("放棄所有未儲存的變更?")) return;
+  if (!confirm("Discard all unsaved changes?")) return;
   state.draft = toDraft(state.saved); clearDirty(); showErrors(null); renderView();
 });
 
 async function onRestart() {
-  if (dirty && !confirm("目前有未儲存的變更,重新啟動只會套用「已儲存」的設定。繼續?")) return;
+  if (dirty && !confirm("You have unsaved changes. Restarting only applies the saved settings. Continue?")) return;
   showErrors(null);
   await setBusy(true);
-  try { state.status = (await sendJSON("POST", "restart")).status; }
+  try { state.status = (await sendJSON("POST", "restart")).status; toast("Kea restarted"); }
   catch (e) { showErrors(e.errors); }
   await setBusy(false);
   renderStatus();
@@ -335,10 +563,12 @@ async function onRestart() {
 (async function init() {
   renderTabs();
   try { await loadAll(); } catch (e) { showErrors(e.errors); }
+  api("interfaces").then((r) => { state.interfaces = r; if (tab === "settings") renderView(); }).catch(() => {});
+  loadLeases();
   setInterval(() => { if (!document.hidden && !busy) refreshStatus(); }, 5000);
   setInterval(() => { if (!document.hidden && tab === "leases") loadLeases(); }, 10000);
+  setInterval(() => { if (!document.hidden && tab === "logs" && logView.auto) pollLogs(false); }, 2000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
-  loadLeases();
 })();
 </script>
 </body>

@@ -9,13 +9,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "kea", "app"))
 import settings as cfg  # noqa: E402
 
 FAKE_KEA = """#!/bin/sh
-# fake kea daemon: `-t FILE` validates, `-c FILE` runs until killed.
+# fake kea daemon: `-t FILE` validates, `-c FILE` logs and runs until killed.
 mode="$1"; file="$2"
 if [ "$mode" = "-t" ]; then
   if grep -q FAIL_ME "$file"; then echo "fake: config rejected" >&2; exit 1; fi
   exit 0
 fi
-exec sleep 300
+trap 'echo "fake: SIGHUP received"' HUP
+echo "fake: started $0 $*"
+while true; do sleep 0.1; done
 """
 
 

@@ -1,7 +1,7 @@
 configuration:
   interface:
-    name: "實體網路介面"
-    description: "欲監聽 DHCP 的網卡名稱（例如：eth0, enp3s0）。網段、Pool、DNS、靜態綁定請至側邊欄「Kea DHCP」Web UI 設定。"
+    name: "初始網路介面"
+    description: "Add-on 第一次啟動時使用的網卡名稱（例如：eth0, enp3s0）。之後請到側邊欄「Kea DHCP」Web UI 的 Settings 分頁修改；網段、Pool、DNS、靜態綁定也都在那裡設定。"
   enable_dhcp6:
-    name: "啟用 DHCPv6 服務"
-    description: "開啟後將同時分發 IPv6 位址（IPv6 網段於 Web UI 設定）。變更後需重新啟動 Add-on。"
+    name: "初始是否啟用 DHCPv6"
+    description: "DHCPv6 開關的初始值。在 Web UI 第一次儲存後，請改用 Web UI 的 Settings 分頁。"

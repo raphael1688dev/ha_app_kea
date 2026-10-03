@@ -1,5 +1,5 @@
 name: "ISC Kea DHCP Server"
-version: "2.0.0"
+version: "2.1.0"
 slug: "isc_kea_dhcp"
 description: "ISC Kea Dual-Stack DHCP Server (DHCPv4 + optional DHCPv6) with Web UI"
 url: "https://github.com/raphael1688dev/ha_app_kea"
@@ -20,7 +20,7 @@ privileged:
   - NET_BIND_SERVICE
 map:
   - config:rw
-# 部署層級設定。網段、Pool、DNS、靜態綁定等營運設定請至側邊欄「Kea DHCP」Web UI 管理。
+# Initial defaults only: after the first save in the Web UI, interface and DHCPv6 are managed there (Settings tab).
 options:
   interface: "eth0"
   enable_dhcp6: false

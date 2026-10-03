@@ -1,17 +1,24 @@
-"""Owns the Kea daemons: stage + test configs, persist settings, (re)start."""
+"""Owns the Kea daemons: stage + test configs, persist settings, reload/restart,
+capture daemon output, and manipulate lease files."""
+import collections
+import ipaddress
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
 
+import leases as lease_files
 import settings as cfg
 
 DAEMONS = {
     "dhcp4": {"binary": "kea-dhcp4", "conf": "kea-dhcp4.conf", "leases": "kea-leases4.csv"},
     "dhcp6": {"binary": "kea-dhcp6", "conf": "kea-dhcp6.conf", "leases": "kea-leases6.csv"},
 }
+LOG_LIMIT = 3000
+LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
 
 
 def log(message):
@@ -23,7 +30,7 @@ def load_options(path):
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
-        log(f"無法讀取 {path},使用預設選項")
+        log(f"cannot read {path}, using default options")
         return {}
 
 
@@ -32,8 +39,10 @@ class KeaManager:
         self.options = options
         self.conf_dir = conf_dir
         self.data_dir = data_dir
-        self.interface = str(options.get("interface") or "eth0")
-        self.enabled = ["dhcp4"] + (["dhcp6"] if options.get("enable_dhcp6") else [])
+        # The add-on options only seed the global settings; once settings.json
+        # has a "global" section, the Web UI is the source of truth.
+        self.default_global = cfg.default_global(
+            str(options.get("interface") or "eth0"), bool(options.get("enable_dhcp6")))
         self.settings_path = os.path.join(data_dir, "settings.json")
 
         self.lock = threading.RLock()
@@ -42,6 +51,10 @@ class KeaManager:
         self.last_error = None
         self.settings = None
         self._stopping = False
+
+        self._logs = collections.deque(maxlen=LOG_LIMIT)
+        self._log_seq = 0
+        self._log_lock = threading.Lock()
 
         for path in (self.conf_dir, self.data_dir, "/run/kea"):
             try:
@@ -57,7 +70,49 @@ class KeaManager:
             "KEA_LOG_FILE_DIR": self.data_dir,
         })
 
-    # ------------------------------------------------------------------ paths
+    # -------------------------------------------------------------- globals
+    @property
+    def interface(self):
+        return self._global_of(self.settings)["interface"]
+
+    @property
+    def enabled(self):
+        return self._enabled_for(self.settings)
+
+    def _global_of(self, data):
+        return (data or {}).get("global") or self.default_global
+
+    def _enabled_for(self, data):
+        return ["dhcp4"] + (["dhcp6"] if self._global_of(data)["enable_dhcp6"] else [])
+
+    # ---------------------------------------------------------------- logs
+    def _add_log(self, source, line):
+        with self._log_lock:
+            self._log_seq += 1
+            self._logs.append({"seq": self._log_seq, "ts": time.time(),
+                               "source": source, "line": line})
+        label = "kea-addon" if source == "addon" else DAEMONS[source]["binary"]
+        print(f"[{label}] {line}", flush=True)
+
+    def _log(self, message):
+        self._add_log("addon", message)
+
+    def get_logs(self, since=0, source=None, limit=500):
+        limit = max(1, min(int(limit), LOG_LIMIT))
+        with self._log_lock:
+            entries = [e for e in self._logs
+                       if e["seq"] > since and (not source or e["source"] == source)]
+            last = self._log_seq
+        return {"entries": entries[-limit:], "last_seq": last}
+
+    def _pump(self, name, proc):
+        try:
+            for line in proc.stdout:
+                self._add_log(name, line.rstrip("\r\n"))
+        finally:
+            proc.stdout.close()
+
+    # --------------------------------------------------------------- paths
     def lease_path(self, name):
         return os.path.join(self.data_dir, DAEMONS[name]["leases"])
 
@@ -67,21 +122,25 @@ class KeaManager:
     def _binary(self, name):
         return shutil.which(DAEMONS[name]["binary"])
 
-    # ----------------------------------------------------------- persistence
+    # --------------------------------------------------------- persistence
+    def _default_settings(self):
+        g = self.default_global
+        return cfg.default_settings(g["interface"], g["enable_dhcp6"])
+
     def load_settings(self):
         try:
             with open(self.settings_path, encoding="utf-8") as fh:
                 raw = json.load(fh)
         except FileNotFoundError:
-            log("找不到 settings.json,建立預設設定")
-            return cfg.default_settings()
+            self._log("settings.json not found, using defaults")
+            return self._default_settings()
         except (OSError, ValueError) as exc:
-            log(f"讀取 settings.json 失敗:{exc};改用預設設定")
-            return cfg.default_settings()
-        cleaned, errors = cfg.validate(raw)
+            self._log(f"failed to read settings.json: {exc}; using defaults")
+            return self._default_settings()
+        cleaned, errors = cfg.validate(raw, self.default_global)
         if errors:
-            log("settings.json 內容有誤:" + "; ".join(errors))
-        return cleaned if cleaned else cfg.default_settings()
+            self._log("settings.json has problems: " + "; ".join(errors))
+        return cleaned if cleaned else self._default_settings()
 
     def _save_settings(self, data):
         tmp = self.settings_path + ".tmp"
@@ -89,24 +148,24 @@ class KeaManager:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         os.replace(tmp, self.settings_path)
 
-    # ----------------------------------------------------------- render/test
+    # ------------------------------------------------------- render / test
     def _render(self, name, data):
         if name == "dhcp4":
-            return cfg.render_dhcp4(data, self.interface, self.lease_path(name))
-        return cfg.render_dhcp6(data, self.interface, self.lease_path(name))
+            return cfg.render_dhcp4(data, self.lease_path(name))
+        return cfg.render_dhcp6(data, self.lease_path(name))
 
     def _stage_and_test(self, data):
         """Write *.new files and run `kea -t`. Returns a list of problems."""
         problems = []
         staged = []
-        for name in self.enabled:
+        for name in self._enabled_for(data):
             new_path = self._conf_path(name, ".new")
             with open(new_path, "w", encoding="utf-8") as fh:
                 json.dump(self._render(name, data), fh, indent=2)
             staged.append(new_path)
             binary = self._binary(name)
             if not binary:
-                log(f"找不到 {DAEMONS[name]['binary']},略過語法檢查")
+                self._log(f"{DAEMONS[name]['binary']} not found, skipping config test")
                 continue
             result = subprocess.run(
                 [binary, "-t", new_path], env=self.env,
@@ -114,7 +173,7 @@ class KeaManager:
             if result.returncode != 0:
                 output = (result.stdout + result.stderr).strip().splitlines()
                 tail = "\n".join(output[-12:])
-                problems.append(f"{DAEMONS[name]['binary']} 設定檢查失敗:\n{tail}")
+                problems.append(f"{DAEMONS[name]['binary']} rejected the configuration:\n{tail}")
         if problems:
             for path in staged:
                 try:
@@ -123,20 +182,28 @@ class KeaManager:
                     pass
         return problems
 
-    def _commit_staged(self):
-        for name in self.enabled:
+    def _commit_staged(self, data):
+        for name in self._enabled_for(data):
             os.replace(self._conf_path(name, ".new"), self._conf_path(name))
 
-    # --------------------------------------------------------------- process
+    # ------------------------------------------------------------- process
+    def _running(self, name):
+        proc = self.procs.get(name)
+        return bool(proc and proc.poll() is None)
+
     def _start(self, name):
         binary = self._binary(name)
         if not binary:
-            log(f"找不到 {DAEMONS[name]['binary']},無法啟動(開發模式)")
+            self._log(f"{DAEMONS[name]['binary']} not found, cannot start (development mode)")
             return
-        conf = self._conf_path(name)
-        log(f"啟動 {DAEMONS[name]['binary']} (interface={self.interface})")
-        self.procs[name] = subprocess.Popen([binary, "-c", conf], env=self.env)
+        self._log(f"starting {DAEMONS[name]['binary']} (interface={self.interface})")
+        proc = subprocess.Popen(
+            [binary, "-c", self._conf_path(name)], env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1)
+        self.procs[name] = proc
         self.info[name] = {"started_at": time.time(), "exit_code": None}
+        threading.Thread(target=self._pump, args=(name, proc), daemon=True).start()
 
     def _stop(self, name):
         proc = self.procs.pop(name, None)
@@ -155,6 +222,29 @@ class KeaManager:
         for name in self.enabled:
             self._start(name)
 
+    def _activate(self, previous):
+        """Bring running daemons in line with the (already committed) settings.
+
+        Running daemons get SIGHUP so Kea re-reads its config without dropping
+        service; a changed interface or a daemon that is not running needs a
+        real (re)start. Returns "reloaded" or "restarted".
+        """
+        wanted = self.enabled
+        interface_changed = (previous is None
+                             or self._global_of(previous)["interface"] != self.interface)
+        action = "reloaded"
+        for name in DAEMONS:
+            if name not in wanted:
+                self._stop(name)
+            elif self._running(name) and not interface_changed:
+                self._log(f"reloading {DAEMONS[name]['binary']} configuration (SIGHUP)")
+                self.procs[name].send_signal(signal.SIGHUP)
+            else:
+                self._stop(name)
+                self._start(name)
+                action = "restarted"
+        return action
+
     def watch(self):
         """Background loop: notice daemons that died on their own."""
         while not self._stopping:
@@ -165,25 +255,28 @@ class KeaManager:
                     if code is not None and self.info[name]["exit_code"] is None:
                         self.info[name]["exit_code"] = code
                         self.last_error = (
-                            f"{DAEMONS[name]['binary']} 已異常結束 (exit code {code})。"
-                            "請檢查設定後按「儲存並套用」或「重新啟動」。")
-                        log(self.last_error)
+                            f"{DAEMONS[name]['binary']} exited unexpectedly (exit code {code}). "
+                            "Fix the settings, then use \"Save & apply\" or \"Restart Kea\".")
+                        self._log(self.last_error)
 
-    # ------------------------------------------------------------ public API
+    # ----------------------------------------------------------- public API
     def startup(self):
         with self.lock:
             self.settings = self.load_settings()
             problems = self._stage_and_test(self.settings)
             if problems:
                 self.last_error = "\n".join(problems)
-                log("啟動時設定檢查失敗,Kea 未啟動。請從 Web UI 修正設定。\n" + self.last_error)
+                self._log("Configuration test failed at startup; Kea was not started. "
+                          "Fix the settings in the Web UI.\n" + self.last_error)
                 return
-            self._commit_staged()
+            self._commit_staged(self.settings)
+            if "dhcp6" not in self.enabled:
+                self._log("DHCPv6 is disabled, not starting kea-dhcp6")
             self._restart_all()
             self.last_error = None
 
     def apply(self, raw):
-        cleaned, errors = cfg.validate(raw)
+        cleaned, errors = cfg.validate(raw, self.default_global)
         if errors:
             return {"ok": False, "errors": errors}
         with self.lock:
@@ -191,11 +284,11 @@ class KeaManager:
             if problems:
                 return {"ok": False, "errors": problems}
             self._save_settings(cleaned)
-            self._commit_staged()
-            self.settings = cleaned
-            self._restart_all()
+            self._commit_staged(cleaned)
+            previous, self.settings = self.settings, cleaned
+            action = self._activate(previous)
             self.last_error = None
-            return {"ok": True, "settings": cleaned, "status": self.status()}
+            return {"ok": True, "settings": cleaned, "action": action, "status": self.status()}
 
     def restart(self):
         with self.lock:
@@ -205,19 +298,71 @@ class KeaManager:
             if problems:
                 self.last_error = "\n".join(problems)
                 return {"ok": False, "errors": problems}
-            self._commit_staged()
+            self._commit_staged(self.settings)
             self._restart_all()
             self.last_error = None
             return {"ok": True, "status": self.status()}
 
+    def import_preview(self, raw):
+        """Validate/migrate an uploaded settings file without applying it."""
+        cleaned, errors = cfg.validate(raw, self.default_global)
+        return {"ok": not errors, "errors": errors, "settings": cleaned if not errors else None}
+
+    def delete_lease(self, family, address):
+        """Remove a lease by appending a lifetime-0 row while the daemon is stopped."""
+        if family not in DAEMONS:
+            return {"ok": False, "errors": ["unknown address family"]}
+        try:
+            ip = ipaddress.ip_address(str(address).strip())
+        except ValueError:
+            return {"ok": False, "errors": ["invalid IP address"]}
+        if ip.version != (4 if family == "dhcp4" else 6):
+            return {"ok": False, "errors": ["address does not match the address family"]}
+        address = str(ip)
+        with self.lock:
+            path = self.lease_path(family)
+            fieldnames, row = lease_files.find_latest_row(path, address)
+            if row is None or str(row.get("valid_lifetime", "")).strip() == "0":
+                return {"ok": False, "errors": [f"no lease found for {address}"]}
+            error = None
+            self._stop(family)
+            try:
+                lease_files.append_deleted_row(path, fieldnames, row)
+                self._log(f"deleted lease {address}")
+            except OSError as exc:
+                error = f"could not update the lease file: {exc}"
+            if family in self.enabled:
+                self._start(family)
+            if error:
+                return {"ok": False, "errors": [error]}
+            return {"ok": True}
+
+    def list_interfaces(self):
+        names, default = [], None
+        try:
+            names = sorted(n for n in os.listdir("/sys/class/net") if n != "lo")
+        except OSError:
+            pass
+        try:
+            with open("/proc/net/route", encoding="utf-8") as fh:
+                for line in list(fh)[1:]:
+                    parts = line.split()
+                    if len(parts) > 2 and parts[1] == "00000000":
+                        default = parts[0]
+                        break
+        except OSError:
+            pass
+        return {"interfaces": names, "default": default}
+
     def status(self):
         with self.lock:
+            enabled = self.enabled
             daemons = {}
             for name in DAEMONS:
                 proc = self.procs.get(name)
                 running = bool(proc and proc.poll() is None)
                 daemons[name] = {
-                    "enabled": name in self.enabled,
+                    "enabled": name in enabled,
                     "installed": self._binary(name) is not None,
                     "running": running,
                     "pid": proc.pid if running else None,
@@ -226,7 +371,7 @@ class KeaManager:
                 }
             return {
                 "interface": self.interface,
-                "enable_dhcp6": "dhcp6" in self.enabled,
+                "enable_dhcp6": "dhcp6" in enabled,
                 "daemons": daemons,
                 "last_error": self.last_error,
             }

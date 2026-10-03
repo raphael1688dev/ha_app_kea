@@ -1,40 +1,67 @@
 # ISC Kea DHCP Add-on for Home Assistant
 
-ISC Kea Dual-Stack DHCP Server（DHCPv4 + 可選 DHCPv6），附 Home Assistant Ingress Web UI。
+ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) with a Home Assistant Ingress Web UI.
 
-## 安裝
+## Installation
 
-1. Home Assistant → 設定 → Add-ons → Add-on Store → 右上角選單 → Repositories
-2. 加入：`https://github.com/raphael1688dev/ha_app_kea`
-3. 安裝「ISC Kea DHCP Server」，設定網卡後啟動。
-4. 開啟側邊欄的 **Kea DHCP**，在 Web UI 設定網段。
+1. In Home Assistant, go to Settings → Add-ons → Add-on Store → ⋮ menu (top right) → Repositories.
+2. Add `https://github.com/raphael1688dev/ha_app_kea`.
+3. Install **ISC Kea DHCP Server**, set the network interface, and start it.
+4. Open **Kea DHCP** in the sidebar and configure your subnets in the Web UI.
 
-## 設定分工
+## Features (Web UI)
 
-| 位置 | 內容 |
+| Tab | What you can do |
 |---|---|
-| Add-on 設定頁 | `interface`（監聽網卡）、`enable_dhcp6`（是否啟用 DHCPv6） |
-| Web UI（Ingress） | 多個 IPv4 / IPv6 網段、Pool、閘道、DNS、租約時間、靜態 IP 綁定、租約列表、服務狀態 |
+| **IPv4 / IPv6** | Multiple subnets; multiple address pools per subnet; gateway, DNS, lease time; static reservations (MAC for IPv4, DUID for IPv6). Advanced options: domain name, search domains, NTP servers, custom DHCP options by name, DHCPv6 prefix delegation pools |
+| **Leases** | Active IPv4 / IPv6 leases with filtering and sorting; **Reserve** turns a lease into a static reservation; **Delete** removes a lease |
+| **Logs** | Live Kea and add-on log, filter by daemon or text |
+| **Settings** | Network interface, DHCPv6 on/off, settings export and import |
 
-Web UI 的設定存放於 `/config/kea/settings.json`。按「儲存並套用」時，會先驗證輸入並用 `kea-dhcpX -t` 檢查，
-通過才寫入並重啟 Kea；任何一步失敗都不會動到現有設定。
+The server status and a **Restart Kea** button are always visible at the top.
 
-> 預設會建立一個 `192.168.1.0/24` 範例網段，**請先改成你自己的網段**再讓裝置來取得位址。
+## How settings are applied
 
-## 注意事項
+Web UI settings are stored in `/config/kea/settings.json`. When you click **Save & apply**:
 
-- 使用 `host_network`，請確認網路上沒有其他 DHCP Server（例如路由器）同時發放同網段位址。
-- 租約記錄與 `settings.json` 保存於 HA 的 `/config/kea/`。
-- DHCPv6 預設關閉，需將 `enable_dhcp6` 設為 `true` 並重新啟動 Add-on。
-- Web UI 只接受來自 Home Assistant Supervisor（Ingress）的連線，不對外開放。
+1. The input is validated.
+2. The generated Kea configuration is checked with `kea-dhcpX -t`.
+3. Only if both pass is the configuration written. Running daemons are told to reload it (`SIGHUP`), so
+   leases and service are not interrupted. Changing the network interface, enabling DHCPv6, or a daemon
+   that is not running causes a (re)start instead.
 
-## 開發
+If any step fails, the running configuration is left untouched and the errors are shown.
 
-Web UI 後端為 FastAPI（`kea/app/`），前端為單一 `static/index.html`（原生 JS、相對路徑以相容 Ingress）。
+**Import** loads a settings file into the editor (older single-pool files are upgraded automatically) and
+changes nothing until you click **Save & apply**.
+
+## Add-on Configuration tab
+
+`interface` and `enable_dhcp6` in the add-on Configuration tab are only the **initial defaults** used until
+the first save in the Web UI. After that, the Web UI's Settings tab is authoritative.
+
+> A sample `192.168.1.0/24` subnet is created on first start. **Change it to your own network** before
+> letting devices obtain addresses from this server.
+
+## Notes
+
+- The add-on uses `host_network`. Make sure no other DHCP server (for example your router) is handing out
+  addresses on the same network.
+- Lease files and `settings.json` are kept in `/config/kea/` in Home Assistant.
+- **Deleting a lease** briefly stops the Kea daemon while the lease file is edited. The client keeps its
+  address until the lease runs out and then asks again.
+- Kea output is also written to the add-on log in Home Assistant.
+- The Web UI only accepts connections from the Home Assistant Supervisor (Ingress). It is not exposed
+  anywhere else.
+
+## Development
+
+The Web UI backend is FastAPI (`kea/app/`). The frontend is a single `static/index.html` using plain
+JavaScript and relative URLs so it works behind Ingress.
 
 ```bash
 pip install -r requirements-dev.txt
 pytest tests
 ```
 
-測試使用假的 `kea-dhcp4` / `kea-dhcp6` 腳本，不需要安裝 Kea。
+Tests use fake `kea-dhcp4` / `kea-dhcp6` scripts, so Kea does not need to be installed.

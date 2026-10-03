@@ -1,0 +1,7 @@
+configuration:
+  interface:
+    name: "Initial network interface"
+    description: "Interface to serve DHCP on the first time the add-on starts (e.g. eth0, enp3s0). After that, change it in the Settings tab of the \"Kea DHCP\" Web UI. Subnets, pools, DNS and reservations are managed there too."
+  enable_dhcp6:
+    name: "Initially enable DHCPv6"
+    description: "Initial value of the DHCPv6 switch. After the first save in the Web UI, use the Settings tab there instead."

@@ -5,6 +5,7 @@ Ingress proxy, so every request must originate from the Supervisor
 (172.30.32.2). Anything else gets 403. Mutating endpoints additionally require
 ``Content-Type: application/json`` so a cross-site HTML form cannot trigger them.
 """
+import json
 import os
 import sys
 import threading
@@ -12,10 +13,10 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from leases import read_leases
-from manager import KeaManager, load_options, log
+from manager import LOG_SOURCES, KeaManager, load_options, log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "static", "index.html")
@@ -33,7 +34,7 @@ def create_app(manager, allowed_ips):
         manager.startup()
         threading.Thread(target=manager.watch, daemon=True).start()
         yield
-        log("收到終止訊號,停止 Kea 與 Web UI...")
+        log("termination signal received, stopping Kea and the Web UI...")
         manager.shutdown()
 
     app = FastAPI(
@@ -88,6 +89,33 @@ def create_app(manager, allowed_ips):
         result = manager.restart()
         return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
+    @app.delete("/api/leases/{family}/{address}", dependencies=[Depends(require_json)])
+    def delete_lease(family: str, address: str):
+        result = manager.delete_lease(family, address)
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.get("/api/logs")
+    def logs(since: int = 0, source: str = "", limit: int = 500):
+        if source and source not in LOG_SOURCES:
+            raise HTTPException(400, "unknown log source")
+        return manager.get_logs(since=since, source=source or None, limit=limit)
+
+    @app.get("/api/interfaces")
+    def interfaces():
+        return manager.list_interfaces()
+
+    @app.get("/api/backup")
+    def backup():
+        body = json.dumps(manager.settings, ensure_ascii=False, indent=2)
+        return Response(
+            body, media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="kea-settings.json"'})
+
+    @app.post("/api/import", dependencies=[Depends(require_json)])
+    def import_settings(data: dict = Body(...)):
+        result = manager.import_preview(data)
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
     return app
 
 
@@ -103,9 +131,7 @@ def main():
     port = int(os.environ.get("KEA_UI_PORT", "8099"))
     bind = os.environ.get("KEA_UI_BIND", "0.0.0.0")
 
-    if "dhcp6" not in manager.enabled:
-        log("DHCPv6 已停用 (enable_dhcp6=false),略過 kea-dhcp6")
-    log(f"Web UI 啟動於 {bind}:{port} (僅允許 {', '.join(sorted(allowed))})")
+    log(f"Web UI listening on {bind}:{port} (allowed clients: {', '.join(sorted(allowed))})")
     uvicorn.run(create_app(manager, allowed), host=bind, port=port,
                 log_level="warning", access_log=False)
     return 0
