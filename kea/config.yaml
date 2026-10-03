@@ -1,5 +1,5 @@
 name: "ISC Kea DHCP Server"
-version: "2.1.0"
+version: "2.1.1"
 slug: "isc_kea_dhcp"
 description: "ISC Kea Dual-Stack DHCP Server (DHCPv4 + optional DHCPv6) with Web UI"
 url: "https://github.com/raphael1688dev/ha_app_kea"
@@ -7,6 +7,7 @@ arch:
   - amd64
   - aarch64
 init: false
+stage: experimental
 startup: services
 boot: auto
 host_network: true
@@ -17,9 +18,8 @@ panel_title: "Kea DHCP"
 privileged:
   - NET_ADMIN
   - NET_RAW
-  - NET_BIND_SERVICE
 map:
-  - config:rw
+  - app_config:rw
 # Initial defaults only: after the first save in the Web UI, interface and DHCPv6 are managed there (Settings tab).
 options:
   interface: "eth0"

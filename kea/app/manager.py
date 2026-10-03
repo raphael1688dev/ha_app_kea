@@ -17,6 +17,7 @@ DAEMONS = {
     "dhcp4": {"binary": "kea-dhcp4", "conf": "kea-dhcp4.conf", "leases": "kea-leases4.csv"},
     "dhcp6": {"binary": "kea-dhcp6", "conf": "kea-dhcp6.conf", "leases": "kea-leases6.csv"},
 }
+PERSISTENT_MOUNT = "/config"   # where the `app_config` map is mounted in the container
 LOG_LIMIT = 3000
 LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
 
@@ -262,6 +263,10 @@ class KeaManager:
     # ----------------------------------------------------------- public API
     def startup(self):
         with self.lock:
+            if not self.storage_persistent():
+                self._log("WARNING: /config is not mounted. Settings and leases will be lost when "
+                          "the add-on restarts. The Supervisor may be older than 2026.07 and "
+                          "not know the 'app_config' map type; update Home Assistant.")
             self.settings = self.load_settings()
             problems = self._stage_and_test(self.settings)
             if problems:
@@ -354,6 +359,15 @@ class KeaManager:
             pass
         return {"interfaces": names, "default": default}
 
+    def storage_persistent(self):
+        """False when /config is not a mount, i.e. settings and leases would sit on
+        the container's ephemeral layer and vanish on restart (the Supervisor skips
+        map types it does not know, such as `app_config` before 2026.07)."""
+        data = os.path.abspath(self.data_dir)
+        if data == PERSISTENT_MOUNT or data.startswith(PERSISTENT_MOUNT + os.sep):
+            return os.path.ismount(PERSISTENT_MOUNT)
+        return True
+
     def status(self):
         with self.lock:
             enabled = self.enabled
@@ -374,6 +388,7 @@ class KeaManager:
                 "enable_dhcp6": "dhcp6" in enabled,
                 "daemons": daemons,
                 "last_error": self.last_error,
+                "storage_persistent": self.storage_persistent(),
             }
 
     def shutdown(self):

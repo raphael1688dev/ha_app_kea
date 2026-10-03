@@ -219,6 +219,10 @@ function renderStatus() {
   // overwrites (or scrolls away from) validation errors from a save attempt.
   const kerr = document.getElementById("kerr");
   kerr.replaceChildren();
+  if (st.storage_persistent === false)
+    kerr.append(h("div", { class: "banner warn" },
+      "Persistent storage is not mounted at /config, so settings and leases will be lost when the add-on restarts. " +
+      "Update Home Assistant / Supervisor (2026.07 or newer is required for the app_config mapping), then restart the add-on."));
   if (st.last_error)
     kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }

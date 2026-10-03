@@ -261,3 +261,17 @@ def test_import_preview(mgr, good):
     bad = mgr.import_preview(good)
     assert bad["ok"] is False and bad["errors"] and bad["settings"] is None
     assert mgr.import_preview([])["ok"] is False
+
+
+# ------------------------------------------------------------ storage guard
+def test_storage_guard(mgr, monkeypatch):
+    import manager as manager_mod
+    assert mgr.storage_persistent() is True and mgr.status()["storage_persistent"] is True  # tmp dir
+
+    mgr.data_dir = "/config/kea"
+    monkeypatch.setattr(manager_mod.os.path, "ismount", lambda p: False)
+    assert mgr.storage_persistent() is False
+    monkeypatch.setattr(manager_mod.os.path, "ismount", lambda p: p == "/config")
+    assert mgr.storage_persistent() is True
+    mgr.data_dir = "/configuration/kea"          # similar prefix must not count as /config
+    assert mgr.storage_persistent() is True

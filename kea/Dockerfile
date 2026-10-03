@@ -1,6 +1,5 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-dockerfile
-ARG BUILD_FROM=ghcr.io/home-assistant/base:3.24
-FROM ${BUILD_FROM}
+FROM ghcr.io/home-assistant/base:3.24
 
 RUN apk add --no-cache \
         bash \
@@ -21,7 +20,13 @@ RUN chmod a+x /run.sh
 
 CMD [ "/run.sh" ]
 
+# BUILD_VERSION / BUILD_ARCH are provided by the Supervisor (or the HA builder action).
+ARG BUILD_VERSION
+ARG BUILD_ARCH
 LABEL \
+    io.hass.version="${BUILD_VERSION}" \
+    io.hass.type="app" \
+    io.hass.arch="${BUILD_ARCH}" \
     org.opencontainers.image.title="Home Assistant App: ISC Kea DHCP Server" \
     org.opencontainers.image.description="ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) with an Ingress Web UI." \
     org.opencontainers.image.source="https://github.com/raphael1688dev/ha_app_kea"
