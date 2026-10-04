@@ -149,10 +149,12 @@ def run():
         header = DEFAULT_V4_HEADER.split(",")
         with open(lease_file, "w", newline="", encoding="utf-8") as fh:
             csv.writer(fh, lineterminator="\n").writerow(header)
-    row = {name: "" for name in header}
+    # Kea parses every non-text column as a number, so an empty value (e.g. pool_id) makes it
+    # discard the row ("bad lexical cast"). Real Kea writes 0 there; do the same.
+    text_columns = {"address", "hwaddr", "client_id", "hostname", "user_context", "duid"}
+    row = {name: ("" if name in text_columns else "0") for name in header}
     row.update(address="192.168.1.150", hwaddr="aa:bb:cc:dd:ee:99", valid_lifetime="86400",
-               expire=str(int(time.time()) + 86400), subnet_id="1", fqdn_fwd="0", fqdn_rev="0",
-               hostname="smoke", state="0")
+               expire=str(int(time.time()) + 86400), subnet_id="1", hostname="smoke")
     with open(lease_file, "a", newline="", encoding="utf-8") as fh:
         csv.DictWriter(fh, fieldnames=header, lineterminator="\n").writerow(row)
     leases = call("GET", "/api/leases")[1]["dhcp4"]
@@ -166,7 +168,13 @@ def run():
     time.sleep(4)
     if not daemon()["running"]:
         raise Failure("kea-dhcp4 died after reading the lease file with the deleted-lease row")
-    check_log_clean(mark, "the lease deletion")
+    try:
+        check_log_clean(mark, "the lease deletion")
+    except Failure as exc:
+        with open(lease_file, encoding="utf-8") as fh:
+            tail = fh.read().splitlines()
+        raise Failure(f"{exc}\n  lease file header : {tail[0] if tail else '(empty)'}\n"
+                      + "\n".join(f"  lease file row {i}  : {line}" for i, line in enumerate(tail[1:][-4:], 1)))
     if "192.168.1.150" in [l["address"] for l in call("GET", "/api/leases")[1]["dhcp4"]]:
         raise Failure("the lease is still listed after deletion")
 
