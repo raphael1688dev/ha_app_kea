@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+- Fix: the Leases tab and Delete lost leases about an hour after start. Kea tidies its lease file every hour and moves
+  the old state to `.1`/`.2` files; those are now read too (in Kea's own load order).
+- Fix: Save & apply now watches Kea for a moment after applying. If Kea stops, or rejects a reload, the previous
+  configuration is restored and the problem is shown (for example an interface that does not exist). Before, the Web UI
+  reported success and the broken setting stayed saved.
+- Fix: for IPv6 leases the identifier is the DUID (Reserve used the MAC address when Kea had recorded one), and delegated
+  prefixes are shown with their length and cannot be reserved as addresses.
+- Fix: a damaged `settings.json` no longer crashes the app on start-up or on import; a section that cannot be read is
+  treated as having no subnets.
+- Fix: a Kea that has only just started is restarted instead of reloaded (a reload signal sent too early would kill it);
+  deleting a lease no longer starts a daemon that was stopped; importing a file without a `global` section keeps the
+  current interface instead of the app's initial one.
+- Security: the Web UI no longer takes the caller's address from `X-Forwarded-For`, so another process on the same host
+  cannot pass itself off as the Supervisor; the JSON content type must match exactly, and chunked request bodies are refused.
+- Web UI: the messages after saving say what really happened (DHCPv6 started or stopped, Kea restarted or reloaded); the
+  form is locked while a save is running; the log view no longer shows lines twice after changing the filter.
+
 ## 2.1.7
 - Wording: Home Assistant now calls add-ons "apps" (since 2026.2), so the Web UI, the documentation, the log
   messages and the repository name say "app". The documented install steps now use the current menu names
@@ -18,7 +36,8 @@
 
 ## 2.1.3
 - Reproducible builds: every Python dependency of the Web UI, transitive ones included, is now pinned in
-  `requirements.txt` (previously only two packages were pinned). No functional change.
+  `requirements.txt` (previously only two packages were pinned), except `pydantic-core`, which pydantic pins itself.
+  No functional change.
 
 ## 2.1.2
 - Fix: Kea 3.0 refused to start because lease files were outside its default directory

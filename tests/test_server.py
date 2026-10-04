@@ -170,3 +170,74 @@ def test_import_preview(client, manager):
     r = client.post("/api/import", json=bad)
     assert r.status_code == 400 and r.json()["errors"]
     assert manager.applied is None   # preview never applies
+
+
+# ------------------------------------------------------------------- hardening
+def test_a_non_json_content_type_that_merely_mentions_json_is_rejected(client):
+    sneaky = {"content-type": "text/plain;x=application/json"}
+    assert client.post("/api/restart", headers=sneaky).status_code == 415
+    assert client.put("/api/settings", content=b"{}", headers=sneaky).status_code == 415
+    ok = {"content-type": "Application/JSON; charset=utf-8"}                  # case and parameters are fine
+    assert client.post("/api/restart", content=b"{}", headers=ok).status_code == 200
+
+
+def test_chunked_bodies_cannot_bypass_the_size_limit(client):
+    r = client.put("/api/settings", content=iter([b"{}", b"{}"]), headers={"content-type": "application/json"})
+    assert r.status_code == 411
+
+
+def serve(manager, allowed):
+    """Run the real uvicorn server (as production does) on a free local port."""
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from server import make_config
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = uvicorn.Server(make_config(create_app(manager, allowed), "127.0.0.1", port))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    assert server.started
+    return server, thread, port
+
+
+def status_of(port, headers=None):
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/status", headers=headers or {})
+    try:
+        return urllib.request.urlopen(request, timeout=5).status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def test_x_forwarded_for_cannot_pass_as_the_supervisor(manager):
+    """By default uvicorn replaces the client address with X-Forwarded-For for connections from 127.0.0.1, so a
+    process on the host (the app runs on the host network) could pose as 172.30.32.2. make_config() switches that off."""
+    server, thread, port = serve(manager, {"172.30.32.2"})
+    try:
+        assert status_of(port) == 403
+        assert status_of(port, {"X-Forwarded-For": "172.30.32.2"}) == 403
+        assert status_of(port, {"Forwarded": "for=172.30.32.2"}) == 403
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+def test_the_real_server_serves_an_allowed_client(manager):
+    server, thread, port = serve(manager, {"127.0.0.1"})
+    try:
+        assert status_of(port) == 200
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)

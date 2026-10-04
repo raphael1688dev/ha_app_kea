@@ -113,7 +113,7 @@ def run():
         raise Failure("kea-dhcp4 is not installed in the image")
     v4_lines = [e["line"] for e in log_entries() if e["source"] == "dhcp4"]
     print(f"    kea-dhcp4 pid {d['pid']}, {len(v4_lines)} log lines; first: {v4_lines[0][:140] if v4_lines else '-'}")
-    time.sleep(2)
+    time.sleep(3)          # the app restarts (rather than signals) a daemon younger than 2 s
     if not daemon()["running"]:
         raise Failure("kea-dhcp4 exited shortly after start")
     check_log_clean(0, "startup")
@@ -139,6 +139,26 @@ def run():
     check_log_clean(mark, "the SIGHUP reload")
     reload_lines = [e["line"] for e in log_entries() if e["seq"] > mark and e["source"] == "dhcp4"]
     print(f"    still running as pid {pid}; Kea logged {len(reload_lines)} lines after the signal")
+
+    step("a configuration Kea cannot run is refused and the previous one restored")
+    good_interface = status()["interface"]
+    bad = copy.deepcopy(rich)
+    bad["global"]["interface"] = "nonexistent0"
+    code, body = call("PUT", "/api/settings", bad)
+    if code == 200 and body.get("ok"):
+        raise Failure("an interface that does not exist was accepted")
+    first_error = ((body or {}).get("errors") or ["(no message)"])[0].splitlines()[0]
+    print(f"    refused (HTTP {code}): {first_error[:150]}")
+    wait_for(lambda: daemon()["running"], "kea-dhcp4 running again after the rollback", timeout=60)
+    if status()["interface"] != good_interface:
+        raise Failure(f"the interface changed to {status()['interface']!r} although the apply was refused")
+    saved_interface = call("GET", "/api/state")[1]["settings"]["global"]["interface"]
+    if saved_interface != good_interface:
+        raise Failure(f"settings.json kept the refused interface {saved_interface!r}")
+    time.sleep(3)
+    if not daemon()["running"]:
+        raise Failure("kea-dhcp4 is not running after the rollback")
+    print(f"    still running on {good_interface}, settings unchanged")
 
     step("lease deletion: Kea must accept the lifetime-0 row we append")
     lease_file = os.path.join(DATA_DIR, "kea-leases4.csv")

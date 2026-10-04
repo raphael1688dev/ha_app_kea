@@ -6,8 +6,8 @@
 //   - Python pins in kea/requirements.txt           (runtime, shipped to users)
 //   - Python pins in requirements-dev.txt           (tests / CI only)
 // NOT tracked by Renovate: Kea itself. It comes from the Alpine package repository, so it only
-// changes with the base image; the CI "Kea series guard" (ci/kea-series) and the weekly CI run
-// report any change.
+// changes with the base image; the CI "Kea series guard" (ci/kea-series) reports a change of series
+// (major.minor, not patch releases) and the weekly CI run reports failures.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [

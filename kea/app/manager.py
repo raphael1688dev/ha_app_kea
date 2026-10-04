@@ -19,6 +19,11 @@ DAEMONS = {
 }
 PERSISTENT_MOUNT = "/config"   # where the `app_config` map is mounted in the container
 LOG_LIMIT = 3000
+# After applying settings we watch the daemons for a moment: Kea can accept a config file in `-t` and still
+# fail for real (for example an interface that does not exist), and a reload failure only shows up in its log.
+SETTLE_SECONDS = 1.5
+RELOAD_GRACE = 2.0       # a daemon younger than this may not have installed its SIGHUP handler yet
+FAIL_MARKERS = ("RECONFIGURATION_FAIL", "CONFIG_LOAD_FAIL", "INIT_FAIL")
 LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
 
 
@@ -52,6 +57,8 @@ class KeaManager:
         self.last_error = None
         self.settings = None
         self._stopping = False
+        self.settle_seconds = SETTLE_SECONDS
+        self.reload_grace = RELOAD_GRACE
 
         self._logs = collections.deque(maxlen=LOG_LIMIT)
         self._log_seq = 0
@@ -138,7 +145,11 @@ class KeaManager:
         except (OSError, ValueError) as exc:
             self._log(f"failed to read settings.json: {exc}; using defaults")
             return self._default_settings()
-        cleaned, errors = cfg.validate(raw, self.default_global)
+        try:
+            cleaned, errors = cfg.validate(raw, self.default_global)
+        except Exception as exc:                       # a malformed file must not crash-loop the app
+            self._log(f"settings.json could not be understood ({type(exc).__name__}: {exc}); using defaults")
+            return self._default_settings()
         if errors:
             self._log("settings.json has problems: " + "; ".join(errors))
         return cleaned if cleaned else self._default_settings()
@@ -168,9 +179,13 @@ class KeaManager:
             if not binary:
                 self._log(f"{DAEMONS[name]['binary']} not found, skipping config test")
                 continue
-            result = subprocess.run(
-                [binary, "-t", new_path], env=self.env,
-                capture_output=True, text=True, timeout=30)
+            try:
+                result = subprocess.run(
+                    [binary, "-t", new_path], env=self.env,
+                    capture_output=True, text=True, timeout=30)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                problems.append(f"{DAEMONS[name]['binary']} could not test the configuration: {exc}")
+                continue
             if result.returncode != 0:
                 output = (result.stdout + result.stderr).strip().splitlines()
                 tail = "\n".join(output[-12:])
@@ -224,27 +239,93 @@ class KeaManager:
             self._start(name)
 
     def _activate(self, previous):
-        """Bring running daemons in line with the (already committed) settings.
+        """Bring the daemons in line with the (already committed) settings.
 
-        Running daemons get SIGHUP so Kea re-reads its config without dropping
-        service; a changed interface or a daemon that is not running needs a
-        real (re)start. Returns "reloaded" or "restarted".
+        Running daemons get SIGHUP so Kea re-reads its config without dropping service. A changed interface,
+        a daemon that is not running, or one that started a moment ago (its SIGHUP handler may not be installed
+        yet, and the default action of SIGHUP is to terminate) gets a real (re)start. Turning DHCPv6 on or off
+        only starts or stops kea-dhcp6. Returns which daemons were reloaded / restarted / started / stopped.
         """
         wanted = self.enabled
         interface_changed = (previous is None
                              or self._global_of(previous)["interface"] != self.interface)
-        action = "reloaded"
+        changes = {"reloaded": [], "restarted": [], "started": [], "stopped": []}
+        now = time.time()
         for name in DAEMONS:
+            was_running = self._running(name)
+            started_at = self.info[name]["started_at"] or 0
             if name not in wanted:
+                if was_running:
+                    changes["stopped"].append(name)
                 self._stop(name)
-            elif self._running(name) and not interface_changed:
+            elif was_running and not interface_changed and now - started_at >= self.reload_grace:
                 self._log(f"reloading {DAEMONS[name]['binary']} configuration (SIGHUP)")
                 self.procs[name].send_signal(signal.SIGHUP)
+                changes["reloaded"].append(name)
             else:
                 self._stop(name)
                 self._start(name)
-                action = "restarted"
-        return action
+                changes["restarted" if was_running else "started"].append(name)
+        return changes
+
+    def _snapshot(self):
+        """Current settings.json and generated configs, so a failed apply can be undone."""
+        def read(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    return fh.read()
+            except OSError:
+                return None
+        return {"settings": read(self.settings_path),
+                "confs": {name: read(self._conf_path(name)) for name in DAEMONS}}
+
+    def _restore(self, path, text):
+        if text is None:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return
+        tmp = path + ".restore"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+
+    def _rollback(self, previous, snapshot):
+        self._log("restoring the previous configuration")
+        self._restore(self.settings_path, snapshot["settings"])
+        for name, text in snapshot["confs"].items():
+            self._restore(self._conf_path(name), text)
+        self.settings = previous
+        self._restart_all()
+        self.last_error = None
+
+    def _check_daemons(self, mark):
+        problems = []
+        for name in self.enabled:
+            if self._binary(name) is None:
+                continue                                   # development machine without Kea
+            proc = self.procs.get(name)
+            if proc is None or proc.poll() is not None:
+                code = proc.poll() if proc else None
+                tail = [e["line"] for e in self.get_logs(since=mark, source=name, limit=6)["entries"]]
+                problems.append(f"{DAEMONS[name]['binary']} stopped right after the new configuration was applied"
+                                f" (exit code {code})." + ("\n" + "\n".join(tail) if tail else ""))
+        if not problems:
+            bad = [e["line"] for e in self.get_logs(since=mark, limit=LOG_LIMIT)["entries"]
+                   if e["source"] in DAEMONS and any(m in e["line"] for m in FAIL_MARKERS)]
+            if bad:
+                problems.append("Kea reported a problem with the new configuration:\n" + "\n".join(bad[:4]))
+        return problems
+
+    def _settle(self, mark):
+        """Watch the daemons for a moment after an apply; return the problems found (empty list = fine)."""
+        deadline = time.time() + self.settle_seconds
+        while True:
+            problems = self._check_daemons(mark)
+            if problems or time.time() >= deadline:
+                return problems
+            time.sleep(0.2)
 
     def watch(self):
         """Background loop: notice daemons that died on their own."""
@@ -281,19 +362,29 @@ class KeaManager:
             self.last_error = None
 
     def apply(self, raw):
-        cleaned, errors = cfg.validate(raw, self.default_global)
+        cleaned, errors = cfg.validate(raw, self._global_of(self.settings))
         if errors:
             return {"ok": False, "errors": errors}
         with self.lock:
             problems = self._stage_and_test(cleaned)
             if problems:
                 return {"ok": False, "errors": problems}
+            snapshot = self._snapshot()
+            previous = self.settings
             self._save_settings(cleaned)
             self._commit_staged(cleaned)
-            previous, self.settings = self.settings, cleaned
-            action = self._activate(previous)
+            self.settings = cleaned
+            with self._log_lock:
+                mark = self._log_seq
+            changes = self._activate(previous)
+            failures = self._settle(mark)
+            if failures:
+                self._rollback(previous, snapshot)
+                return {"ok": False, "errors": failures + ["The previous configuration was restored."]}
             self.last_error = None
-            return {"ok": True, "settings": cleaned, "action": action, "status": self.status()}
+            action = "restarted" if changes["restarted"] or "dhcp4" in changes["started"] else "reloaded"
+            return {"ok": True, "settings": cleaned, "action": action, "changes": changes,
+                    "status": self.status()}
 
     def restart(self):
         with self.lock:
@@ -310,7 +401,7 @@ class KeaManager:
 
     def import_preview(self, raw):
         """Validate/migrate an uploaded settings file without applying it."""
-        cleaned, errors = cfg.validate(raw, self.default_global)
+        cleaned, errors = cfg.validate(raw, self._global_of(self.settings))
         return {"ok": not errors, "errors": errors, "settings": cleaned if not errors else None}
 
     def delete_lease(self, family, address):
@@ -329,6 +420,7 @@ class KeaManager:
             fieldnames, row = lease_files.find_latest_row(path, address)
             if row is None or str(row.get("valid_lifetime", "")).strip() == "0":
                 return {"ok": False, "errors": [f"no lease found for {address}"]}
+            was_running = self._running(family)
             error = None
             self._stop(family)
             try:
@@ -336,8 +428,8 @@ class KeaManager:
                 self._log(f"deleted lease {address}")
             except OSError as exc:
                 error = f"could not update the lease file: {exc}"
-            if family in self.enabled:
-                self._start(family)
+            if was_running and family in self.enabled:
+                self._start(family)          # do not resurrect a daemon that was stopped on purpose or failed
             if error:
                 return {"ok": False, "errors": [error]}
             return {"ok": True}

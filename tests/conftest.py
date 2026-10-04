@@ -15,7 +15,9 @@ if [ "$mode" = "-t" ]; then
   if grep -q FAIL_ME "$file"; then echo "fake: config rejected" >&2; exit 1; fi
   exit 0
 fi
-trap 'echo "fake: SIGHUP received"' HUP
+# markers a test puts into the rendered config: DIE_ME = exit at start-up, RELOAD_FAIL = reject a SIGHUP reload
+if grep -q DIE_ME "$file" 2>/dev/null; then echo "ERROR [kea-fake] DHCP4_INIT_FAIL interface does not exist"; exit 3; fi
+trap 'if grep -q RELOAD_FAIL "$file"; then echo "ERROR [kea-fake] DHCP4_DYNAMIC_RECONFIGURATION_FAIL fake"; else echo "fake: SIGHUP received"; fi' HUP
 echo "fake: started $0 $*"
 while true; do sleep 0.1; done
 """

@@ -288,6 +288,9 @@ def _validate_subnets(section, version, errors):
     label = "IPv4" if version == 4 else "IPv6"
     net_cls = ipaddress.IPv4Network if version == 4 else ipaddress.IPv6Network
 
+    if section is not None and not isinstance(section, dict):
+        errors.append(f"{label}: invalid format")
+        return []
     raw_subnets = (section or {}).get("subnets", [])
     if not isinstance(raw_subnets, list):
         errors.append(f"{label}: subnets must be a list")

@@ -276,3 +276,13 @@ def test_render_omits_empty_options_and_pd_pools():
     sub6["dns"] = []
     rendered = cfg.render_dhcp6(data, "/x")["Dhcp6"]["subnet6"][0]
     assert rendered["option-data"] == [] and "pd-pools" not in rendered
+
+
+def test_malformed_sections_are_errors_not_crashes():
+    for bad in ({"dhcp4": "x"}, {"dhcp4": [1]}, {"dhcp6": 5}, {"dhcp4": None, "dhcp6": []}):
+        data = cfg.default_settings()
+        data.update(bad)
+        cleaned, errors = cfg.validate(data)                 # used to raise AttributeError
+        assert cleaned is not None
+        if bad.get("dhcp4") not in (None,) or bad.get("dhcp6") not in (None, []):
+            assert any("invalid format" in e for e in errors), bad

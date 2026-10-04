@@ -42,7 +42,7 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   `<!-- guide:end -->`. Edit both identically. `tests/test_docs.py` ties the guide's wording to the Web UI labels
   (`UI_TERMS`) and to the validation limits, so renaming a label means updating the guide and that list.
 - **Releases**: `version` in `kea/config.yaml` is bumped only by `scripts/release.py`, never by hand. Note user-visible
-  changes under `## Unreleased` in `kea/CHANGELOG.md`. A release is `scripts/release.py patch --from-git`, commit, then
+  changes under `## Unreleased` in `kea/CHANGELOG.md`. A release is `scripts/release.py patch --from-git --tag` (bumps, commits, tags), then
   `git push --atomic origin main vX.Y.Z`; `release.yml` publishes the GitHub Release once CI is green. Merging code
   does not ship it, only a version bump does.
 - **Dependencies**: `kea/requirements.txt` and `requirements-dev.txt` are exact `==` pins (tests enforce it).
@@ -60,9 +60,18 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   (needed for the `app_config` mount, silently skipped by older Supervisors), because the Supervisor has no
   minimum-Supervisor key. The Core to Supervisor correspondence is assumed, not verified. Do not drop it while `app_config` is used.
 - Kea 3.x reads lease files only from its data directory unless `KEA_DHCP_DATA_DIR` is set (`KEA_LEASE_DIR` does not
-  exist). `kea -t` does not open the lease database, so only really starting Kea (the CI smoke test) catches this.
+  exist). `kea -t` does not open the lease database, so only really starting Kea (`tests/test_real_kea.py`, the CI smoke test) catches this.
 - The Home Assistant base image starts with s6: container environment variables reach `run.sh` only through the
   `#!/usr/bin/with-contenv` shebang.
+- Kea rotates its lease file about every hour (LFC, `lfc-interval` 3600): the old state moves to `<file>.1`/`.2`/`.completed`
+  and the main file only holds what changed since. Always read leases with `leases.lease_file_chain()` (Kea's own load
+  order), never just the main file; a smoke test shorter than an hour cannot notice the difference.
+- `kea -t` accepts configs Kea then cannot run (for example an interface that does not exist) and a rejected SIGHUP reload
+  only shows in Kea's log. So `manager.apply` watches the daemons for a moment and rolls back (settings.json, generated
+  configs, running daemons) if one stopped or logged a failure. A daemon younger than 2 s is restarted, not signalled
+  (the default action of SIGHUP is to terminate it).
+- uvicorn must run with `proxy_headers=False` (`server.make_config`): by default it takes the client address from
+  `X-Forwarded-For` for connections from 127.0.0.1, which would let any process on this host-network machine pass as the Supervisor.
 - The Web UI accepts only requests from the Supervisor (`172.30.32.2`); tests override it with `KEA_UI_ALLOWED`.
 - The sidebar entry is off by default (`ingress_panel` is a user option), so the guide says "Open Web UI".
 - Web UI text from the network (lease hostnames) is untrusted: build DOM with `textContent`, never `innerHTML`.

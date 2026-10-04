@@ -4,9 +4,11 @@
 
 ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) for Home Assistant, with a Web UI inside Home Assistant.
 
-> **Status: experimental.** Every change is tested in CI against the real Kea 3.0 (configuration, start-up, reload,
-> lease handling, amd64 and aarch64). It has not had wide use in real Home Assistant installations yet, so back up
-> your router's DHCP settings before switching over, and please report problems as issues.
+> **Status: experimental.** Every push to `main` and every pull request is tested in CI with the real Kea 3.0 on
+> amd64: configuration, start-up, reload, refusing a configuration Kea cannot run, and lease-file handling. After a
+> merge the aarch64 image is built and its configuration and start-up are tested too. The app has **not been
+> installed in a real Home Assistant yet**, so back up your router's DHCP settings before switching over, and please
+> report problems as issues.
 
 ## Installation
 
@@ -84,23 +86,26 @@ outside the pools.
 | Domain name | IPv4 only. The local domain handed to clients, for example `home.lan`. |
 | Search domains (comma separated) | Domains clients append when they look up short names. |
 | NTP servers (comma separated) | IPv4 only. Time servers for clients. |
-| Custom DHCP options | Any other option by its Kea name (for example `tftp-server-name` or `boot-file-name`) and its value. Kea checks the name and value when you apply. Options that have their own field above cannot be repeated here. |
+| Custom DHCP options | Any other option by its Kea name (for example `tftp-server-name` or `boot-file-name`) and its value. Names are lowercase (letters, digits and hyphens), each option may appear once per subnet, and the value is text of up to 255 characters. Kea checks the name and value when you apply. Options that have their own field above cannot be repeated here. |
 | Prefix delegation pools | IPv6 only. Prefixes handed to routers behind this one: *Prefix* (no host bits), *Prefix length* and *Delegated length* (not smaller than the prefix length). |
 
 ### Settings tab
 
 - **Network interface** and **Enable DHCPv6 server**. Changing the interface restarts Kea.
-- **Export settings** downloads everything you configured as one file. **Import settings** loads such a file into
+- **Export settings** downloads your saved settings as one file. **Import settings** loads such a file into
   the editor so you can look it over; nothing changes until you click **Save & apply**.
 
 ## Using the Web UI
 
 - **Status bar** (top): the interface, whether DHCPv4 and DHCPv6 are running, and a **Restart Kea** button.
-- **Save & apply** (appears when you have unsaved changes): checks your input, asks Kea to test the new
-  configuration, and only then applies it. Kea reloads without dropping service, except when the interface changes
-  or DHCPv6 is switched on or off, which restarts it. **Discard changes** goes back to the saved settings.
+- **Save & apply** (appears when you have unsaved changes): checks your input, has Kea test the new configuration
+  (for the services that are switched on), applies it, and then watches Kea for a moment. If Kea cannot run the new
+  configuration, the previous one is restored and the problem is shown. Kea reloads without dropping service;
+  changing the interface restarts it, and switching DHCPv6 on or off only starts or stops the DHCPv6 service.
+  **Discard changes** goes back to the saved settings.
 - **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
-  into the editor as a reservation (review it, then Save & apply). **Delete** removes a lease; Kea is stopped for a
+  into the editor as a reservation (review it, then Save & apply); delegated IPv6 prefixes are shown with their
+  length and cannot be reserved. **Delete** removes a lease; Kea is stopped for a
   moment while that happens, and the device just asks again when its lease runs out.
 - **Logs tab:** the live Kea and app log, filterable by daemon or text. The same output is in the app's
   normal log page.
@@ -116,11 +121,11 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 
 | What you see | What to check |
 |---|---|
-| **Request failed** with a list of problems | Fix the listed problems. Nothing was changed. |
-| Red **Kea problem** banner | Kea stopped or rejected the configuration. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
+| **Request failed** with a list of problems | Fix the listed problems. When you were saving, nothing was changed (a configuration Kea cannot run is restored automatically). |
+| Red **Kea problem** banner | Kea exited, or the saved configuration failed its test when Kea was started or restarted. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
 | Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the app. Until then your settings are lost on every restart. |
 | `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
-| Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows start-up and errors; individual DHCP packets are not logged. |
+| Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows what Kea writes at its default level (start-up, reloads, errors and similar events); individual DHCP packets are not logged. |
 | IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
 
 ## Your data

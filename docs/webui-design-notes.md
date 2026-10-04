@@ -13,8 +13,9 @@
 | Operation | Web UI (Ingress) | Multiple IPv4/IPv6 subnets, pools, gateway, DNS, lease time, static reservations, lease list, service status |
 
 - Web UI settings are stored in `/config/kea/settings.json` and survive restarts.
-- Apply flow: validate, render the configuration, test it with `kea-dhcpX -t`, and only if that passes write it and
-  reload or restart the Kea processes. If anything fails, the current configuration is left alone.
+- Apply flow: validate, render the configuration, test it with `kea-dhcpX -t` (enabled daemons only), and only if that
+  passes write it and reload or restart the Kea processes. A failure before the write leaves everything untouched; one
+  after it (a daemon that stops, or a rejected reload) is detected by watching the daemons for ~1.5 s and rolled back.
 - This replaces the original `spec.md` design where every field lives on the Home Assistant Configuration page
   (`spec.md` is kept as a historical document).
 
@@ -31,7 +32,7 @@
 
 ## 4. Technical decisions
 - Backend: **FastAPI + uvicorn** (the owner's choice; it replaced an earlier `http.server` plan). Installed in a
-  separate venv, `/opt/venv`, with every version pinned in `kea/requirements.txt`. Routes are plain `def` (they run in
+  separate venv, `/opt/venv`, with every version pinned in `kea/requirements.txt` (`pydantic-core` is left to pydantic, which pins it exactly). Routes are plain `def` (they run in
   a thread pool because the manager blocks); `/docs` and `/openapi.json` are disabled.
 - Frontend: a single `index.html` in plain JavaScript, using **relative URLs** only so it works behind Ingress.
 - Leases: read straight from the memfile CSV; no `kea-ctrl-agent` (Kea 3.0 deprecated the Control Agent).
@@ -43,17 +44,17 @@
 - Kea 3.x only reads and writes lease, pid and lock files in fixed directories unless told otherwise. The lease
   directory variable is `KEA_DHCP_DATA_DIR` (`KEA_LEASE_DIR` does not exist).
 
-## 5. Status (v2.1.3)
+## 5. Status
 
 | Item | Status |
 |---|---|
-| Multiple subnets and pools, static reservations, lease list, service status | ✅ Done; unit tests, browser checks, real-Kea CI |
+| Multiple subnets and pools, static reservations, lease list, service status | ✅ Done; unit tests, real-Kea CI, checked by hand in a browser during development |
 | Advanced options: domain name, search domains, NTP, custom options | ✅ Done (the meaning of custom options is checked by Kea's `-t`) |
 | DHCPv6 prefix delegation pools | ✅ Done |
 | Leases: filter, sort, reserve, delete | ✅ Done |
-| Log viewer in the Web UI (captures daemon stdout in a 3000-line ring buffer; still echoed to the Home Assistant log) | ✅ Done |
+| Log viewer in the Web UI (captures daemon stdout in a 3000-line ring buffer, shows the last 500 lines on opening and keeps 1500 in the page; still echoed to the Home Assistant log) | ✅ Done |
 | Settings export / import (import only loads the editor, it does not apply; v1 files are migrated automatically) | ✅ Done |
-| Applying settings reloads with SIGHUP (restart only when the interface changes, a daemon is not running, or DHCPv6 is toggled) | ✅ Done; **verified against the real Kea 3.0.3 in CI** |
+| Applying settings reloads with SIGHUP (restart only when the interface changes, a daemon is not running, or DHCPv6 is toggled) | ✅ Done; DHCPv4 reload **verified against the real Kea 3.0.x on amd64 in CI** (DHCPv6 reload and aarch64 are not exercised) |
 | Interface and DHCPv6 switch editable in the Web UI | ✅ Done (the Home Assistant options are initial defaults) |
 | Image build (amd64 and aarch64), real-Kea configuration tests, container smoke test | ✅ Done in CI (GitHub Actions) |
 | Installation in a real Home Assistant (Supervisor, Ingress, `app_config` mount, real DHCP clients) | ⬜ Not verified |
@@ -82,7 +83,7 @@ fixed by the smoke test (`kea -t` does not open the lease database, so only a re
 
 ## 7. Dependency tracking (Renovate)
 - Configuration in `renovate.json5`. It tracks GitHub Actions, the Dockerfile base image, `kea/requirements.txt`
-  (runtime, fully pinned including transitive dependencies) and `requirements-dev.txt`.
+  (runtime, pinned including transitive dependencies except `pydantic-core`) and `requirements-dev.txt`.
 - Kea is not tracked: its version is decided by the Alpine package repository and only changes with the base image.
   The CI *Kea series guard* and the weekly scheduled run watch it.
 - Merging a dependency PR does not change `version` in `config.yaml`, so users only get the update after a release.

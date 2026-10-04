@@ -13,10 +13,13 @@ python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assist
 ## How settings are applied
 
 Web UI settings are stored in `/config/kea/settings.json` inside the container (the app's config folder on the
-host). **Save & apply** validates the input, renders the Kea configuration, and checks it with `kea-dhcpX -t`. Only
-then is it written, and running daemons get `SIGHUP` so Kea reloads without interrupting service. Changing the
-interface, switching DHCPv6 on or off, or a daemon that is not running causes a (re)start instead. If any step
-fails the running configuration is left untouched.
+host). **Save & apply** validates the input, renders the Kea configuration, and checks it with `kea-dhcpX -t` (only
+for the daemons that are switched on). Only then is it written, and running daemons get `SIGHUP` so Kea reloads
+without interrupting service. A changed interface, a daemon that is not running, or one that started less than 2 s
+ago is (re)started instead; switching DHCPv6 on or off only starts or stops `kea-dhcp6`. Because `kea -t` accepts
+some configurations Kea then cannot run, the manager watches the daemons for about 1.5 s afterwards; if one stopped
+or logged a failed reconfiguration, `settings.json`, the generated configs and the running daemons are restored and
+the error is returned. A failure *before* the write leaves everything untouched.
 
 ## Continuous integration
 
@@ -27,10 +30,10 @@ fails the running configuration is left untouched.
 | Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the app packaging |
 | Supervisor rules | `kea/config.yaml` against the **current** Supervisor source: valid `privileged` capabilities, non-deprecated `map` types and `arch` |
 | Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs, and a real start), and a smoke test of the running container (startup, SIGHUP reload, lease deletion, restart) |
-| Image (aarch64) | Builds under QEMU and runs the real-Kea config tests (not on pull requests) |
+| Image (aarch64) | Builds under QEMU and runs the real-Kea config tests. Not on pull requests, and not part of the `CI passed` check |
 
 The image job also guards the Kea version: Alpine decides which Kea is installed, and `ci/kea-series` holds the
-approved `major.minor`. If Alpine moves to a different series the job fails; review the change (Kea release notes,
+approved `major.minor` (a patch update, 3.0.x to 3.0.y, is not reported). If Alpine moves to a different series the job fails; review the change (Kea release notes,
 generated configuration) and then update that file. If the **weekly** run fails, an issue is opened automatically,
 because something upstream changed without a commit here.
 
@@ -43,8 +46,8 @@ To reproduce the smoke test locally you need Docker; see the `image` job for the
 
 | What | Where | PR grouping |
 |---|---|---|
-| GitHub Actions (pinned by digest) | `.github/workflows/` | one "GitHub Actions" PR |
-| Home Assistant base image (Alpine tag + digest) | `kea/Dockerfile` | separate PR, labelled `base-image` |
+| GitHub Actions (Renovate pins them by digest) | `.github/workflows/` | one "GitHub Actions" PR |
+| Home Assistant base image (Alpine tag; Renovate adds the digest) | `kea/Dockerfile` | separate PR, labelled `base-image` |
 | Python runtime packages | `kea/requirements.txt` | one PR, labelled `runtime` |
 | Python test tooling | `requirements-dev.txt` | one PR |
 

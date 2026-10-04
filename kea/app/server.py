@@ -24,7 +24,8 @@ MAX_BODY = 1024 * 1024
 
 
 def require_json(request: Request):
-    if "application/json" not in (request.headers.get("content-type") or ""):
+    media_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if media_type != "application/json":
         raise HTTPException(415, "Content-Type must be application/json")
 
 
@@ -47,6 +48,8 @@ def create_app(manager, allowed_ips):
         host = request.client.host if request.client else ""
         if host not in allowed_ips:
             return JSONResponse({"error": f"forbidden ({host})"}, status_code=403)
+        if "chunked" in (request.headers.get("transfer-encoding") or "").lower():
+            return JSONResponse({"error": "chunked request bodies are not accepted"}, status_code=411)
         length = request.headers.get("content-length")
         if length and length.isdigit() and int(length) > MAX_BODY:
             return JSONResponse({"error": "body too large"}, status_code=413)
@@ -119,6 +122,14 @@ def create_app(manager, allowed_ips):
     return app
 
 
+def make_config(app, host, port):
+    """uvicorn settings. proxy_headers=False is a security setting: by default uvicorn replaces the client
+    address with the X-Forwarded-For header of connections from 127.0.0.1, which would let any process on this
+    (host-network) machine pass itself off as the Supervisor and defeat the source-address check."""
+    return uvicorn.Config(app, host=host, port=port, log_level="warning", access_log=False,
+                          proxy_headers=False)
+
+
 def main():
     options = load_options(os.environ.get("OPTIONS_FILE", "/data/options.json"))
     manager = KeaManager(
@@ -132,8 +143,7 @@ def main():
     bind = os.environ.get("KEA_UI_BIND", "0.0.0.0")
 
     log(f"Web UI listening on {bind}:{port} (allowed clients: {', '.join(sorted(allowed))})")
-    uvicorn.run(create_app(manager, allowed), host=bind, port=port,
-                log_level="warning", access_log=False)
+    uvicorn.Server(make_config(create_app(manager, allowed), bind, port)).run()
     return 0
 
 

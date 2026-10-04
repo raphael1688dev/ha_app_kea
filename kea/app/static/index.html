@@ -222,7 +222,7 @@ function renderStatus() {
   if (st.storage_persistent === false)
     kerr.append(h("div", { class: "banner warn" },
       "Persistent storage is not mounted at /config, so settings and leases will be lost when the app restarts. " +
-      "Update Home Assistant / Supervisor (2026.07 or newer is required for the app_config mapping), then restart the app."));
+      "Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the app."));
   if (st.last_error)
     kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }
@@ -317,7 +317,7 @@ function subnetCard(fam, subnets, idx) {
         if (!confirm("Delete this subnet (including its reservations)?")) return;
         subnets.splice(idx, 1); markDirty(); renderView(); } }, "Delete subnet")),
     h("div", { class: "fields" }, fields),
-    poolsEditor(s), reservationsEditor(fam, s), advancedEditor(fam, s, fam + ":" + idx));
+    poolsEditor(s), reservationsEditor(fam, s), advancedEditor(fam, s, fam + ":" + (s.id == null ? "new" + idx : s.id)));
 }
 
 function renderFamily(fam) {
@@ -359,11 +359,13 @@ function leaseTable(fam, title, all, idLabel) {
       h("thead", {}, h("tr", {}, head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
                        head("Subnet ID", "subnet_id"), head("Time left", "remaining"), h("th", {}))),
       h("tbody", {}, rows.length ? rows.map((l) => h("tr", {},
-        h("td", { class: "mono" }, l.address), h("td", { class: "mono" }, l.identifier),
+        h("td", { class: "mono" }, l.kind === "prefix" && l.prefix_len != null ? l.address + "/" + l.prefix_len : l.address),
+        h("td", { class: "mono" }, l.identifier),
         h("td", {}, l.hostname || "—"), h("td", {}, l.subnet_id == null ? "—" : l.subnet_id),
         h("td", { class: "nowrap" }, fmtDuration(l.remaining)),
         h("td", { class: "nowrap" },
-          h("button", { class: "sm", title: "Add a static reservation for this device", onclick: () => makeStatic(fam, l) }, "Reserve"), " ",
+          h("button", Object.assign({ class: "sm", title: l.kind === "address" ? "Add a static reservation for this device" : "Delegated prefixes and temporary addresses cannot be reserved here",
+            onclick: () => makeStatic(fam, l) }, l.kind === "address" ? {} : { disabled: true, "data-locked": "1" }), "Reserve"), " ",
           h("button", { class: "sm danger", onclick: () => deleteLease(fam, l) }, "Delete"))))
         : h("tr", {}, h("td", { colspan: 6, class: "muted" }, q ? "No leases match the filter" : "No active leases"))))));
 }
@@ -426,11 +428,14 @@ function fillLogBox() {
   box.scrollTop = box.scrollHeight;
 }
 
+let logGeneration = 0;
 async function pollLogs(reset) {
-  if (reset) { logView.since = 0; logView.lines = []; }
+  if (reset) { logView.since = 0; logView.lines = []; logGeneration++; }
+  const generation = logGeneration, since = logView.since;
   let data;
-  try { data = await api("logs?since=" + logView.since + "&source=" + encodeURIComponent(logView.source) + "&limit=500"); }
+  try { data = await api("logs?since=" + since + "&source=" + encodeURIComponent(logView.source) + "&limit=500"); }
   catch (e) { return; }
+  if (generation !== logGeneration || since !== logView.since) return;     // a newer request already took over
   logView.since = data.last_seq;
   if (!data.entries.length && !reset) return;
   const box = document.getElementById("logbox");
@@ -479,7 +484,7 @@ function renderSettings() {
           h("label", { class: "check" },
             h("input", Object.assign({ type: "checkbox", onchange: (e) => { g.enable_dhcp6 = e.target.checked; markDirty(); } },
               g.enable_dhcp6 ? { checked: true } : {})), "Enable DHCPv6 server"))),
-      h("div", { class: "muted small" }, "Changing the interface restarts Kea. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the app's Configuration tab are only the initial defaults.")),
+      h("div", { class: "muted small" }, "Changing the interface restarts Kea. Turning DHCPv6 on or off only starts or stops the DHCPv6 service. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the app's Configuration tab are only the initial defaults.")),
     h("div", { class: "card" },
       h("h3", {}, "Backup & restore"),
       h("p", { class: "muted" }, "Export downloads the saved settings. Import loads a settings file into the editor so you can review it; nothing changes until you click Save & apply."),
@@ -531,7 +536,17 @@ async function refreshStatus() {
 }
 async function setBusy(on) {
   busy = on;
-  for (const b of document.querySelectorAll("button")) b.disabled = on;
+  // Inputs too: text typed while a save is in flight would be replaced by the saved settings afterwards.
+  for (const el of document.querySelectorAll("button, input, select")) if (!el.dataset.locked) el.disabled = on;
+}
+
+function applyMessage(res) {
+  const c = res.changes || {};
+  if (res.action === "restarted") return "Applied. Kea was restarted.";
+  const notes = [];
+  if ((c.started || []).includes("dhcp6")) notes.push("DHCPv6 was started.");
+  if ((c.stopped || []).includes("dhcp6")) notes.push("DHCPv6 was stopped.");
+  return ["Applied. Kea reloaded its configuration without restarting."].concat(notes).join(" ");
 }
 
 document.getElementById("save").addEventListener("click", async () => {
@@ -541,8 +556,7 @@ document.getElementById("save").addEventListener("click", async () => {
     const res = await sendJSON("PUT", "settings", state.draft);
     state.saved = res.settings; state.draft = toDraft(res.settings); state.status = res.status;
     clearDirty();
-    toast(res.action === "reloaded" ? "Applied. Kea reloaded its configuration without restarting."
-                                    : "Applied. Kea was restarted.");
+    toast(applyMessage(res));
   } catch (e) { showErrors(e.errors); }
   await setBusy(false);
   renderStatus(); renderView();
