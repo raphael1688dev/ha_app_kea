@@ -1,4 +1,4 @@
-"""The repository is English only (see CLAUDE.md): no Chinese characters in tracked files."""
+"""The repository is English only (see CLAUDE.md): no Chinese characters in tracked or new files."""
 import os
 import re
 import shutil
@@ -7,13 +7,15 @@ import subprocess
 import pytest
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-CJK = re.compile("[　-〿一-鿿＀-￯]")
+CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")   # ranges as escapes: this file must stay ASCII
 
 
 def tracked_files():
     if not shutil.which("git"):
         pytest.skip("git is not installed (e.g. inside the add-on image); the unit-test job covers this")
-    result = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"], capture_output=True, text=True)
+    # Tracked files plus new files that are not ignored yet, so a file is checked before its first commit.
+    result = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                            capture_output=True, text=True)
     if result.returncode != 0:
         pytest.skip("not a git checkout")
     return [f for f in result.stdout.split("\0") if f]
