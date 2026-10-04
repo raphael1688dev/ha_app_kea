@@ -1,0 +1,68 @@
+name: Bug report
+description: Something does not work the way the documentation says
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. This app is experimental, so reports from real installations are very welcome.
+        Please read the **Troubleshooting** section of the README first. Do not post security problems here: see SECURITY.md.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: Shown on the *Info* tab of the app in Home Assistant.
+      placeholder: "2.1.7"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings > About.
+      placeholder: "2026.7.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Installation type
+      options:
+        - Home Assistant OS
+        - Home Assistant Supervised
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: network
+    attributes:
+      label: Your network
+      description: IPv4 only or also IPv6? Is the router's own DHCP server switched off? Which subnet and network interface did you use?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: The **Logs** tab of the Web UI or the *Log* tab of the app in Home Assistant. Remove anything private (host names, MAC addresses) first.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I looked at the Troubleshooting section of the README.
+          required: true
+        - label: I removed private information from what I pasted.
+          required: true

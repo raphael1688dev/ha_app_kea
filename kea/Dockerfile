@@ -30,4 +30,5 @@ LABEL \
     io.hass.arch="${BUILD_ARCH}" \
     org.opencontainers.image.title="Home Assistant App: ISC Kea DHCP Server" \
     org.opencontainers.image.description="ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) with an Ingress Web UI." \
-    org.opencontainers.image.source="https://github.com/raphael1688dev/ha_app_kea"
+    org.opencontainers.image.source="https://github.com/raphael1688dev/ha_app_kea" \
+    org.opencontainers.image.licenses="MIT"

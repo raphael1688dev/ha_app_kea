@@ -45,6 +45,8 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   changes under `## Unreleased` in `kea/CHANGELOG.md`. A release is `scripts/release.py patch --from-git --tag` (bumps, commits, tags), then
   `git push --atomic origin main vX.Y.Z`; `release.yml` publishes the GitHub Release once CI is green. Merging code
   does not ship it, only a version bump does.
+- **License**: MIT (`LICENSE`, copyright Raphael Chen). Software the app installs is listed in `THIRD_PARTY_NOTICES.md`; a new
+  runtime dependency has to be added there too (a test checks it). Security reports go through `SECURITY.md`.
 - **Dependencies**: `kea/requirements.txt` and `requirements-dev.txt` are exact `==` pins (tests enforce it).
   `pydantic-core` is deliberately not pinned because pydantic pins it. Renovate (`renovate.json5`) proposes updates.
 - **Settings file** `/config/kea/settings.json` is versioned (`settings.migrate()`); keep old formats readable.

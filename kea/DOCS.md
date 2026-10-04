@@ -118,3 +118,6 @@ Settings (`settings.json`) and the lease files are stored in the app's own confi
 <!-- guide:end -->
 
 Project page, issues and developer documentation: https://github.com/raphael1688dev/ha_app_kea
+
+MIT licensed. Not affiliated with ISC or Home Assistant; third-party software and its licenses are listed in
+THIRD_PARTY_NOTICES.md in the project repository.

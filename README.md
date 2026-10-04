@@ -134,6 +134,13 @@ Settings (`settings.json`) and the lease files are stored in the app's own confi
 (`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the app.
 <!-- guide:end -->
 
+## License
+
+The code in this repository is released under the [MIT License](LICENSE). The app installs and runs other software
+(ISC Kea, Alpine Linux, Python packages), each under its own license: see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This project is not affiliated with ISC or Home Assistant.
+Security problems: see [SECURITY.md](SECURITY.md).
+
 ## For developers
 
 Architecture notes, running the tests, CI, dependency updates and how to cut a release are in
