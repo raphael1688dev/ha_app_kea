@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Removed the Traditional Chinese (`zh-Hant`) translation of the configuration options; the add-on is English only.
+
 ## 2.1.3
 - Reproducible builds: every Python dependency of the Web UI, transitive ones included, is now pinned in
   `requirements.txt` (previously only two packages were pinned). No functional change.

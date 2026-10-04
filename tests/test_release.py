@@ -162,7 +162,11 @@ def test_result_on_the_real_files_passes_the_packaging_rules(tmp_path):
     config = yaml.safe_load((tmp_path / "kea" / "config.yaml").read_text())
     log = (tmp_path / "kea" / "CHANGELOG.md").read_text()
     assert re.fullmatch(r"\d+\.\d+\.\d+", str(config["version"]))
-    assert f"## {config['version']}\n- Example note" in log        # what test_docs_and_changelog_present requires
+    # what test_docs_and_changelog_present requires: a section for the new version, holding our note
+    # (plus whatever the real changelog had under "## Unreleased", which the tool moves into it)
+    section = log.split(f"## {config['version']}\n", 1)[1].split("\n## ", 1)[0]
+    assert "- Example note" in section
+    assert "Unreleased" not in log
     original = yaml.safe_load(open(os.path.join(ROOT, "kea", "config.yaml"), encoding="utf-8"))
     assert {k: v for k, v in config.items() if k != "version"} == {k: v for k, v in original.items() if k != "version"}
 
