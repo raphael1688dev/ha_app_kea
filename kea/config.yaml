@@ -6,6 +6,10 @@ url: "https://github.com/raphael1688dev/ha_app_kea"
 arch:
   - amd64
   - aarch64
+# Minimum Home Assistant Core version. The real requirement is Supervisor 2026.07 (the `app_config` map type below,
+# which older Supervisors silently do not mount), but the Supervisor has no minimum-Supervisor key, so the Core
+# version is the proxy. Older Home Assistant versions are not offered this app.
+homeassistant: "2026.7.0"
 init: false
 stage: experimental
 startup: services

@@ -13,7 +13,8 @@ which address. Use it instead of your router's built-in DHCP server.
 - **Only one DHCP server per network.** When you switch this one on, switch off DHCP on your router (or give the
   two servers separate address ranges). Two servers answering the same network cause confusing address clashes.
 - **Give the Home Assistant machine a fixed address**, not one it gets from DHCP: it is now the DHCP server itself.
-- The add-on uses the **host network** and needs a recent Home Assistant (Supervisor 2026.07 or newer).
+- The add-on uses the **host network** and needs **Home Assistant 2026.7.0 or newer**. Older versions are not
+  offered the add-on, because they would not keep your settings across restarts.
 - Have these at hand: your network in CIDR form (for example `192.168.1.0/24`), your router's address (the
   "gateway", for example `192.168.1.1`) and the name of the network interface of the Home Assistant machine on that
   network (for example `eth0` or `enp3s0`).
@@ -102,7 +103,7 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 |---|---|
 | **Request failed** with a list of problems | Fix the listed problems. Nothing was changed. |
 | Red **Kea problem** banner | Kea stopped or rejected the configuration. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
-| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant / Supervisor to 2026.07 or newer, then restart the add-on. Until then your settings are lost on every restart. |
+| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the add-on. Until then your settings are lost on every restart. |
 | `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
 | Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows start-up and errors; individual DHCP packets are not logged. |
 | IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |

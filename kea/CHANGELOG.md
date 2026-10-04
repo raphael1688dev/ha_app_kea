@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Requires Home Assistant 2026.7.0 or newer (`homeassistant` in `config.yaml`). The add-on stores its data with the
+  `app_config` mapping, which older Supervisors silently do not mount, so settings and leases would be lost on every
+  restart. Older versions are no longer offered the add-on.
+
 ## 2.1.5
 - Documentation: a full user guide (quick start, every setting explained, using each tab, IPv6 notes, troubleshooting) in the add-on's Documentation tab and the README.
 

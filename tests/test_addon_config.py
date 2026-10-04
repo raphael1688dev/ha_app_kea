@@ -133,3 +133,16 @@ def test_dev_requirements_are_pinned_and_reuse_the_runtime_set():
     for line in lines:
         if not line.startswith("-r"):
             assert "==" in line, f"dev dependency is not pinned: {line}"
+
+
+def test_minimum_core_version_covers_the_app_config_mount(config):
+    """`app_config` needs Supervisor 2026.07; older Supervisors silently skip the mount, so settings and leases
+    would be lost on restart. The Supervisor has no minimum-Supervisor key, so a minimum *Core* version stands in."""
+    app_mounts = {"app_config", "all_app_configs", "local_apps"}
+    if not any(entry.split(":")[0] in app_mounts for entry in config.get("map", [])):
+        pytest.skip("no app_* map type in use")
+    minimum = config.get("homeassistant")
+    assert isinstance(minimum, str), '`homeassistant: "2026.7.0"` is missing (quote it so YAML keeps it a string)'
+    match = re.fullmatch(r"(\d{4})\.(\d{1,2})\.(\d+)", minimum)
+    assert match, f"{minimum!r} is not a Home Assistant version like 2026.7.0"
+    assert (int(match.group(1)), int(match.group(2))) >= (2026, 7)

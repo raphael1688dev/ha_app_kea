@@ -48,6 +48,9 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 - `config.yaml`: `privileged` accepts only the capabilities in the Supervisor's `Capabilities` enum.
   `NET_BIND_SERVICE` is **not** one of them and makes the Supervisor reject the whole add-on. Use `app_config:rw`, not
   `config` or `addon_config` (deprecated). The Supervisor does not provide `BUILD_FROM` any more: write a plain `FROM`.
+- `homeassistant: "2026.7.0"` in `config.yaml` is the minimum **Core** version. It stands in for "Supervisor 2026.07"
+  (needed for the `app_config` mount, silently skipped by older Supervisors), because the Supervisor has no
+  minimum-Supervisor key. The Core to Supervisor correspondence is assumed, not verified. Do not drop it while `app_config` is used.
 - Kea 3.x reads lease files only from its data directory unless `KEA_DHCP_DATA_DIR` is set (`KEA_LEASE_DIR` does not
   exist). `kea -t` does not open the lease database, so only really starting Kea (the CI smoke test) catches this.
 - The Home Assistant base image starts with s6: container environment variables reach `run.sh` only through the
