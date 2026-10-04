@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.8
 - The project is released under the MIT License, with a list of the third-party software the app uses and
   their licenses (`THIRD_PARTY_NOTICES.md`), a security policy and issue forms.
 - Fix: the Leases tab and Delete lost leases about an hour after start. Kea tidies its lease file every hour and moves
