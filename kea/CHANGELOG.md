@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.0
 - Coming from the "DHCP server" app (ISC dhcpd)? Settings tab > **Import from the DHCP server app** converts its
   options (networks, devices, DNS, NTP, domain, lease times) into the editor and reports what could not be carried
   over. See "Moving from the DHCP server app" in the guide.
