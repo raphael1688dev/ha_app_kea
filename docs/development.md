@@ -12,7 +12,7 @@ python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assist
 
 ## How settings are applied
 
-Web UI settings are stored in `/config/kea/settings.json` inside the container (the add-on's config folder on the
+Web UI settings are stored in `/config/kea/settings.json` inside the container (the app's config folder on the
 host). **Save & apply** validates the input, renders the Kea configuration, and checks it with `kea-dhcpX -t`. Only
 then is it written, and running daemons get `SIGHUP` so Kea reloads without interrupting service. Changing the
 interface, switching DHCPv6 on or off, or a daemon that is not running causes a (re)start instead. If any step
@@ -24,7 +24,7 @@ fails the running configuration is left untouched.
 
 | Job | What it checks |
 |---|---|
-| Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the add-on packaging |
+| Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the app packaging |
 | Supervisor rules | `kea/config.yaml` against the **current** Supervisor source: valid `privileged` capabilities, non-deprecated `map` types and `arch` |
 | Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs, and a real start), and a smoke test of the running container (startup, SIGHUP reload, lease deletion, restart) |
 | Image (aarch64) | Builds under QEMU and runs the real-Kea config tests (not on pull requests) |

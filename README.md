@@ -1,4 +1,4 @@
-# ISC Kea DHCP Add-on for Home Assistant
+# ISC Kea DHCP App for Home Assistant
 
 [![CI](https://github.com/raphael1688dev/ha_app_kea/actions/workflows/ci.yml/badge.svg)](https://github.com/raphael1688dev/ha_app_kea/actions/workflows/ci.yml)
 
@@ -10,9 +10,10 @@ ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) for Home Assistant, wi
 
 ## Installation
 
-1. In Home Assistant, go to Settings → Add-ons → Add-on Store → ⋮ menu (top right) → Repositories.
-2. Add `https://github.com/raphael1688dev/ha_app_kea`.
-3. Install **ISC Kea DHCP Server**, then continue with the quick start below.
+1. In Home Assistant, go to **Settings → Apps** and select **Install app**.
+2. In the top-right corner open the ⋮ menu, select **Repositories**, enter
+   `https://github.com/raphael1688dev/ha_app_kea` and select **Add**.
+3. Find **ISC Kea DHCP Server** in the list, install it, then continue with the quick start below.
 
 <!-- guide:start -->
 ## What it does
@@ -27,18 +28,18 @@ which address. Use it instead of your router's built-in DHCP server.
 - **Only one DHCP server per network.** When you switch this one on, switch off DHCP on your router (or give the
   two servers separate address ranges). Two servers answering the same network cause confusing address clashes.
 - **Give the Home Assistant machine a fixed address**, not one it gets from DHCP: it is now the DHCP server itself.
-- The add-on uses the **host network** and needs **Home Assistant 2026.7.0 or newer**. Older versions are not
-  offered the add-on, because they would not keep your settings across restarts.
+- The app uses the **host network** and needs **Home Assistant 2026.7.0 or newer**. Older versions are not
+  offered the app, because they would not keep your settings across restarts.
 - Have these at hand: your network in CIDR form (for example `192.168.1.0/24`), your router's address (the
   "gateway", for example `192.168.1.1`) and the name of the network interface of the Home Assistant machine on that
   network (for example `eth0` or `enp3s0`).
 
 ## Quick start
 
-1. **Add-on Configuration tab:** set `interface` to the network interface on your network and start the add-on.
+1. **Configuration tab:** set `interface` to the network interface on your network and start the app.
    (If you are unsure of the name, start with the default; the **Settings** tab of the Web UI lists the interfaces
    it found, and you can change it there.)
-2. **Open the Web UI:** click *Open Web UI* on the add-on page. Turn on **Show in sidebar** there if you want a
+2. **Open the Web UI:** click *Open Web UI* on the app's page. Turn on **Show in sidebar** there if you want a
    permanent **Kea DHCP** entry in the sidebar.
 3. **IPv4 tab:** a sample subnet `192.168.1.0/24` is already there. Replace its values with your own network:
    *Subnet (CIDR)*, the *Address pools* start and end (the range of addresses to hand out), *Default gateway*
@@ -50,7 +51,7 @@ which address. Use it instead of your router's built-in DHCP server.
 
 ## Settings reference
 
-### Add-on Configuration tab
+### The app's Configuration tab
 
 | Option | Meaning |
 |---|---|
@@ -101,7 +102,7 @@ outside the pools.
 - **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
   into the editor as a reservation (review it, then Save & apply). **Delete** removes a lease; Kea is stopped for a
   moment while that happens, and the device just asks again when its lease runs out.
-- **Logs tab:** the live Kea and add-on log, filterable by daemon or text. The same output is in the add-on's
+- **Logs tab:** the live Kea and app log, filterable by daemon or text. The same output is in the app's
   normal log page.
 
 ## IPv6 (DHCPv6)
@@ -117,15 +118,15 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 |---|---|
 | **Request failed** with a list of problems | Fix the listed problems. Nothing was changed. |
 | Red **Kea problem** banner | Kea stopped or rejected the configuration. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
-| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the add-on. Until then your settings are lost on every restart. |
+| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the app. Until then your settings are lost on every restart. |
 | `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
 | Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows start-up and errors; individual DHCP packets are not logged. |
 | IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
 
 ## Your data
 
-Settings (`settings.json`) and the lease files are stored in the add-on's own config folder
-(`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the add-on.
+Settings (`settings.json`) and the lease files are stored in the app's own config folder
+(`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the app.
 <!-- guide:end -->
 
 ## For developers

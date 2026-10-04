@@ -1,7 +1,7 @@
 """Run the generated configuration through the *real* Kea (`kea-dhcpX -t`).
 
 Skipped when Kea is not installed (local development); CI runs this inside the
-built add-on image, so a Kea upgrade that rejects our output fails the build.
+built app image, so a Kea upgrade that rejects our output fails the build.
 """
 import copy
 import json
@@ -138,7 +138,7 @@ def _usable_interface():
 @pytest.mark.skipif(not _usable_interface(), reason="no network interface other than lo")
 def test_real_kea_really_starts_and_opens_the_lease_file(tmp_path):
     """`-t` does not open the lease database, so it cannot catch a path Kea refuses at start-up
-    (this once broke the add-on: lease files outside /var/lib/kea need KEA_DHCP_DATA_DIR)."""
+    (this once broke the app: lease files outside /var/lib/kea need KEA_DHCP_DATA_DIR)."""
     import time
     settings = cfg.default_settings(_usable_interface())
     rendered = cfg.render_dhcp4(settings, str(tmp_path / "kea-leases4.csv"))

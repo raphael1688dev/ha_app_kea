@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Wording: Home Assistant now calls add-ons "apps" (since 2026.2), so the Web UI, the documentation, the log
+  messages and the repository name say "app". The documented install steps now use the current menu names
+  (Settings > Apps > Install app > Repositories). Settings, data and behaviour are unchanged.
+
 ## 2.1.6
 - Requires Home Assistant 2026.7.0 or newer (`homeassistant` in `config.yaml`). The add-on stores its data with the
   `app_config` mapping, which older Supervisors silently do not mount, so settings and leases would be lost on every

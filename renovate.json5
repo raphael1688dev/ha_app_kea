@@ -44,7 +44,7 @@
       groupName: "Python runtime dependencies",
       labels: ["dependencies", "runtime"],
       prBodyNotes: [
-        "**Release reminder:** this changes the add-on image. Users only receive it after a release: run `scripts/release.py patch --from-git` (bumps `version` in `kea/config.yaml` and writes the `kea/CHANGELOG.md` entry).",
+        "**Release reminder:** this changes the app image. Users only receive it after a release: run `scripts/release.py patch --from-git` (bumps `version` in `kea/config.yaml` and writes the `kea/CHANGELOG.md` entry).",
         "If CI fails with a pip *dependency conflict*, a package was bumped beyond what its parent allows (for example starlette vs. fastapi). Bump the parent in the same PR.",
       ],
     },
@@ -55,7 +55,7 @@
       labels: ["dependencies", "runtime", "base-image"],
       prBodyNotes: [
         "**Alpine upgrade?** A new Alpine release can change the Kea series (the CI step *Kea series guard* fails if it does). Read the Kea release notes, check the generated configuration, then update `ci/kea-series`.",
-        "**Release reminder:** this changes the add-on image. Then cut a release with `scripts/release.py patch --from-git`, otherwise users do not receive it.",
+        "**Release reminder:** this changes the app image. Then cut a release with `scripts/release.py patch --from-git`, otherwise users do not receive it.",
       ],
     },
   ],

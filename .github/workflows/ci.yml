@@ -58,32 +58,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build the add-on image
+      - name: Build the app image
         run: |
           docker build \
             --build-arg BUILD_VERSION=ci \
             --build-arg BUILD_ARCH=amd64 \
-            --tag kea-addon-ci \
+            --tag kea-app-ci \
             kea/
 
       - name: Record component versions
         id: versions
         run: |
-          kea_version="$(docker run --rm --entrypoint kea-dhcp4 kea-addon-ci -v | head -n1)"
+          kea_version="$(docker run --rm --entrypoint kea-dhcp4 kea-app-ci -v | head -n1)"
           echo "kea=${kea_version}" >> "$GITHUB_OUTPUT"
           {
             echo "### Image contents (amd64)"
             echo
             echo "| Component | Version |"
             echo "|---|---|"
-            echo "| Alpine | $(docker run --rm --entrypoint cat kea-addon-ci /etc/alpine-release) |"
+            echo "| Alpine | $(docker run --rm --entrypoint cat kea-app-ci /etc/alpine-release) |"
             echo "| Kea | ${kea_version} |"
-            echo "| Python | $(docker run --rm --entrypoint /opt/venv/bin/python kea-addon-ci --version) |"
+            echo "| Python | $(docker run --rm --entrypoint /opt/venv/bin/python kea-app-ci --version) |"
             echo
             echo "<details><summary>pip freeze</summary>"
             echo
             echo '```'
-            docker run --rm --entrypoint /opt/venv/bin/pip kea-addon-ci freeze
+            docker run --rm --entrypoint /opt/venv/bin/pip kea-app-ci freeze
             echo '```'
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -107,7 +107,7 @@ jobs:
           docker run --rm --entrypoint sh \
             -e PYTHONDONTWRITEBYTECODE=1 -e REQUIRE_REAL_KEA=1 \
             -v "$PWD:/repo:ro" \
-            kea-addon-ci -c '
+            kea-app-ci -c '
               /opt/venv/bin/pip install --quiet -r /repo/requirements-dev.txt &&
               cd /repo &&
               /opt/venv/bin/python -m pytest tests -q -rs -p no:cacheprovider
@@ -123,7 +123,7 @@ jobs:
             -v "$PWD/ci/options.json:/data/options.json:ro" \
             -v "$RUNNER_TEMP/config:/config" \
             -v "$PWD/ci/smoke_test.py:/smoke_test.py:ro" \
-            kea-addon-ci
+            kea-app-ci
           docker exec kea-smoke /opt/venv/bin/python /smoke_test.py
 
       - name: Container log
@@ -144,13 +144,13 @@ jobs:
         with:
           platforms: arm64
       - uses: docker/setup-buildx-action@v3
-      - name: Build the add-on image
+      - name: Build the app image
         run: |
           docker buildx build \
             --platform linux/arm64 \
             --build-arg BUILD_VERSION=ci \
             --build-arg BUILD_ARCH=aarch64 \
-            --tag kea-addon-ci-arm64 \
+            --tag kea-app-ci-arm64 \
             --load \
             kea/
       - name: Real Kea config tests on aarch64
@@ -158,7 +158,7 @@ jobs:
           docker run --rm --platform linux/arm64 --entrypoint sh \
             -e PYTHONDONTWRITEBYTECODE=1 -e REQUIRE_REAL_KEA=1 \
             -v "$PWD:/repo:ro" \
-            kea-addon-ci-arm64 -c '
+            kea-app-ci-arm64 -c '
               uname -m && kea-dhcp4 -v &&
               /opt/venv/bin/pip install --quiet -r /repo/requirements-dev.txt &&
               cd /repo &&

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the running add-on (stdlib only).
+"""End-to-end smoke test of the running app (stdlib only).
 
 Runs *inside* the container started from the built image, against the real Kea:
 startup, hot reload (SIGHUP), lease deletion and restart. Environment:

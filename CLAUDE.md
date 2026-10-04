@@ -1,13 +1,17 @@
 # CLAUDE.md
 
-Home Assistant add-on that runs the ISC Kea DHCP server (DHCPv4 + optional DHCPv6) with a FastAPI Web UI shown
+Home Assistant app that runs the ISC Kea DHCP server (DHCPv4 + optional DHCPv6) with a FastAPI Web UI shown
 through Home Assistant Ingress. Users install it from this repository; Home Assistant reads `main`.
+
+**The GitHub repository is private** (owner's choice, 2026-10-04). Home Assistant clones repositories anonymously,
+so it cannot add a private one: until it is made public, nobody can install from the README's steps.
+Do not assume it is public.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `kea/` | The add-on itself: `config.yaml`, `Dockerfile`, `run.sh`, `requirements.txt` (runtime pins), `CHANGELOG.md`, `DOCS.md`, `translations/` |
+| `kea/` | The app itself: `config.yaml`, `Dockerfile`, `run.sh`, `requirements.txt` (runtime pins), `CHANGELOG.md`, `DOCS.md`, `translations/` |
 | `kea/app/` | Backend (`settings.py` validate + render Kea configs, `manager.py` daemons/reload/logs, `leases.py`, `server.py`) and `static/index.html` (the whole frontend) |
 | `tests/` | pytest. Fake Kea scripts for most tests; `test_real_kea.py` needs the real Kea |
 | `ci/`, `scripts/` | CI smoke test and approved Kea series; release tool, Supervisor-rule checker |
@@ -30,6 +34,10 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 
 - **Everything in the repo is English** (UI, messages, docs, comments, commits, release notes). `tests/test_english_only.py`
   fails on Chinese characters in tracked files.
+- **Say "app", not "add-on"**: Home Assistant renamed add-ons to apps (user interface since 2026.2). Technical
+  identifiers keep the old word on purpose: the host path `/addon_configs/...`, the legacy `addon_config` map type,
+  and our internal log source key `addon`. `tests/test_terminology.py` enforces this in user-facing files;
+  `spec.md` and old CHANGELOG entries are history and keep the old word.
 - **The user guide exists twice**: in `README.md` and `kea/DOCS.md`, between `<!-- guide:start -->` and
   `<!-- guide:end -->`. Edit both identically. `tests/test_docs.py` ties the guide's wording to the Web UI labels
   (`UI_TERMS`) and to the validation limits, so renaming a label means updating the guide and that list.
@@ -46,7 +54,7 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 ## Hard-won facts (each one broke something before)
 
 - `config.yaml`: `privileged` accepts only the capabilities in the Supervisor's `Capabilities` enum.
-  `NET_BIND_SERVICE` is **not** one of them and makes the Supervisor reject the whole add-on. Use `app_config:rw`, not
+  `NET_BIND_SERVICE` is **not** one of them and makes the Supervisor reject the whole app. Use `app_config:rw`, not
   `config` or `addon_config` (deprecated). The Supervisor does not provide `BUILD_FROM` any more: write a plain `FROM`.
 - `homeassistant: "2026.7.0"` in `config.yaml` is the minimum **Core** version. It stands in for "Supervisor 2026.07"
   (needed for the `app_config` mount, silently skipped by older Supervisors), because the Supervisor has no
@@ -61,7 +69,7 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 
 ## Not verified yet
 
-The add-on has never been installed in a real Home Assistant: the Supervisor loading it, the Ingress panel, the
+The app has never been installed in a real Home Assistant: the Supervisor loading it, the Ingress panel, the
 `app_config` mount and real DHCP clients are only covered by static checks and CI. Deleting a lease appends a
 `valid_lifetime=0` row that Kea accepts, but that Kea treats the lease as deleted is not proven.
 See `docs/webui-design-notes.md` section 6.

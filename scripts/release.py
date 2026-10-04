@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cut a release of the add-on: bump `version` in kea/config.yaml and write the CHANGELOG entry.
+"""Cut a release of the app: bump `version` in kea/config.yaml and write the CHANGELOG entry.
 
 Home Assistant only offers an update when `version` changes, so merging a dependency PR (Renovate)
 or a fix does NOT ship it until this has been run. Standard library only.
@@ -118,7 +118,7 @@ def notes_from_git(root):
 
 # --------------------------------------------------------------------- main
 def run(argv, root):
-    parser = argparse.ArgumentParser(description="Bump the add-on version and write the CHANGELOG entry.")
+    parser = argparse.ArgumentParser(description="Bump the app version and write the CHANGELOG entry.")
     parser.add_argument("bump", help="patch, minor, major, or an explicit version such as 2.3.0")
     parser.add_argument("-m", "--message", action="append", default=[], metavar="TEXT",
                         help="changelog line (repeatable)")

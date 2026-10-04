@@ -100,7 +100,7 @@
 // All URLs are relative (no leading slash) so the page works under HA Ingress.
 const API = (p) => "api/" + p;
 const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "Leases"], ["logs", "Logs"], ["settings", "Settings"]];
-const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6"], ["addon", "Add-on"]];
+const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6"], ["addon", "App"]];
 const MAX_LOG_LINES = 1500;
 
 let state = { status: null, saved: null, draft: null, leases: null, interfaces: null };
@@ -132,7 +132,7 @@ function h(tag, attrs, ...kids) {
 async function api(path, opts) {
   let res;
   try { res = await fetch(API(path), opts); }
-  catch (e) { throw { errors: ["Cannot reach the add-on: " + e.message] }; }
+  catch (e) { throw { errors: ["Cannot reach the app: " + e.message] }; }
   let body = null;
   try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
   if (!res.ok) {
@@ -221,8 +221,8 @@ function renderStatus() {
   kerr.replaceChildren();
   if (st.storage_persistent === false)
     kerr.append(h("div", { class: "banner warn" },
-      "Persistent storage is not mounted at /config, so settings and leases will be lost when the add-on restarts. " +
-      "Update Home Assistant / Supervisor (2026.07 or newer is required for the app_config mapping), then restart the add-on."));
+      "Persistent storage is not mounted at /config, so settings and leases will be lost when the app restarts. " +
+      "Update Home Assistant / Supervisor (2026.07 or newer is required for the app_config mapping), then restart the app."));
   if (st.last_error)
     kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }
@@ -412,7 +412,7 @@ async function deleteLease(fam, lease) {
 
 // ------------------------------------------------------------- logs
 function logLine(e) {
-  const src = { dhcp4: "v4", dhcp6: "v6", addon: "add-on" }[e.source] || e.source;
+  const src = { dhcp4: "v4", dhcp6: "v6", addon: "app" }[e.source] || e.source;
   const cls = /\b(ERROR|FATAL)\b/.test(e.line) ? "err" : /\bWARN/.test(e.line) ? "warn" : "";
   return h("div", { class: cls }, h("span", { class: "src" }, "[" + src + "] "), e.line);
 }
@@ -479,7 +479,7 @@ function renderSettings() {
           h("label", { class: "check" },
             h("input", Object.assign({ type: "checkbox", onchange: (e) => { g.enable_dhcp6 = e.target.checked; markDirty(); } },
               g.enable_dhcp6 ? { checked: true } : {})), "Enable DHCPv6 server"))),
-      h("div", { class: "muted small" }, "Changing the interface restarts Kea. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the add-on Configuration tab are only the initial defaults.")),
+      h("div", { class: "muted small" }, "Changing the interface restarts Kea. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the app's Configuration tab are only the initial defaults.")),
     h("div", { class: "card" },
       h("h3", {}, "Backup & restore"),
       h("p", { class: "muted" }, "Export downloads the saved settings. Import loads a settings file into the editor so you can review it; nothing changes until you click Save & apply."),

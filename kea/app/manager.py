@@ -23,7 +23,7 @@ LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
 
 
 def log(message):
-    print(f"[kea-addon] {message}", flush=True)
+    print(f"[kea-app] {message}", flush=True)
 
 
 def load_options(path):
@@ -40,7 +40,7 @@ class KeaManager:
         self.options = options
         self.conf_dir = conf_dir
         self.data_dir = data_dir
-        # The add-on options only seed the global settings; once settings.json
+        # The app options only seed the global settings; once settings.json
         # has a "global" section, the Web UI is the source of truth.
         self.default_global = cfg.default_global(
             str(options.get("interface") or "eth0"), bool(options.get("enable_dhcp6")))
@@ -92,7 +92,7 @@ class KeaManager:
             self._log_seq += 1
             self._logs.append({"seq": self._log_seq, "ts": time.time(),
                                "source": source, "line": line})
-        label = "kea-addon" if source == "addon" else DAEMONS[source]["binary"]
+        label = "kea-app" if source == "addon" else DAEMONS[source]["binary"]
         print(f"[{label}] {line}", flush=True)
 
     def _log(self, message):
@@ -265,7 +265,7 @@ class KeaManager:
         with self.lock:
             if not self.storage_persistent():
                 self._log("WARNING: /config is not mounted. Settings and leases will be lost when "
-                          "the add-on restarts. The Supervisor may be older than 2026.07 and "
+                          "the app restarts. The Supervisor may be older than 2026.07 and "
                           "not know the 'app_config' map type; update Home Assistant.")
             self.settings = self.load_settings()
             problems = self._stage_and_test(self.settings)

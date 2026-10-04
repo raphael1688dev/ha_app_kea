@@ -18,7 +18,7 @@ CHANGELOG = "# Changelog\n\n## 1.2.3\n- old note\n\n## 1.2.2\n- older\n"
 def repo(tmp_path, monkeypatch):
     """A throw-away git repo with the two files, in the same layout as the real one."""
     if not shutil.which("git"):
-        pytest.skip("git is not installed (e.g. inside the add-on image); the unit-test job covers this")
+        pytest.skip("git is not installed (e.g. inside the app image); the unit-test job covers this")
     for key, value in (("GIT_AUTHOR_NAME", "t"), ("GIT_AUTHOR_EMAIL", "t@t"),
                        ("GIT_COMMITTER_NAME", "t"), ("GIT_COMMITTER_EMAIL", "t@t")):
         monkeypatch.setenv(key, value)

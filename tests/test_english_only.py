@@ -12,7 +12,7 @@ CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")   # ranges as esc
 
 def tracked_files():
     if not shutil.which("git"):
-        pytest.skip("git is not installed (e.g. inside the add-on image); the unit-test job covers this")
+        pytest.skip("git is not installed (e.g. inside the app image); the unit-test job covers this")
     # Tracked files plus new files that are not ignored yet, so a file is checked before its first commit.
     result = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                             capture_output=True, text=True)

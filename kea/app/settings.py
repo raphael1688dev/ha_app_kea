@@ -443,7 +443,7 @@ def validate(raw, fallback_global=None):
     """Validate user supplied settings. Returns ``(cleaned, errors)``.
 
     ``fallback_global`` supplies the interface / DHCPv6 switch when *raw* has no
-    ``global`` section (v1 files, or the add-on options on first start).
+    ``global`` section (v1 files, or the app options on first start).
     """
     errors = []
     if not isinstance(raw, dict):

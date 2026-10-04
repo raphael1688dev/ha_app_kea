@@ -1,4 +1,4 @@
-"""Static checks of the add-on packaging against the Supervisor's validation rules.
+"""Static checks of the app packaging against the Supervisor's validation rules.
 
 The rule sets below mirror supervisor/docker/const.py, supervisor/apps/const.py
 and supervisor/apps/validate.py (checked 2026-10). scripts/check_supervisor_rules.py
@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-ADDON = os.path.join(ROOT, "kea")
+APP_DIR = os.path.join(ROOT, "kea")
 
 VALID_CAPABILITIES = {
     "AUDIT_WRITE", "BPF", "CHECKPOINT_RESTORE", "DAC_READ_SEARCH", "IPC_LOCK", "MKNOD",
@@ -33,7 +33,7 @@ SCHEMA_TYPE = re.compile(r"^(str|bool|int|float|email|url|password|port|match\(.
 
 @pytest.fixture(scope="module")
 def config():
-    with open(os.path.join(ADDON, "config.yaml"), encoding="utf-8") as fh:
+    with open(os.path.join(APP_DIR, "config.yaml"), encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
@@ -79,7 +79,7 @@ def test_options_match_schema(config):
 
 
 def test_translations_cover_every_option(config):
-    folder = os.path.join(ADDON, "translations")
+    folder = os.path.join(APP_DIR, "translations")
     files = [f for f in os.listdir(folder) if f.endswith(".yaml")]
     assert "en.yaml" in files
     for name in files:
@@ -91,7 +91,7 @@ def test_translations_cover_every_option(config):
 
 
 def test_dockerfile_follows_current_rules():
-    with open(os.path.join(ADDON, "Dockerfile"), encoding="utf-8") as fh:
+    with open(os.path.join(APP_DIR, "Dockerfile"), encoding="utf-8") as fh:
         text = fh.read()
     assert re.search(r"^FROM ghcr\.io/home-assistant/base:\S+$", text, re.M), \
         "Dockerfile must use an explicit FROM (BUILD_FROM is no longer provided)"
@@ -103,14 +103,14 @@ def test_dockerfile_follows_current_rules():
 
 def test_docs_and_changelog_present(config):
     for name in ("DOCS.md", "CHANGELOG.md"):
-        assert os.path.isfile(os.path.join(ADDON, name)), name
-    with open(os.path.join(ADDON, "CHANGELOG.md"), encoding="utf-8") as fh:
+        assert os.path.isfile(os.path.join(APP_DIR, name)), name
+    with open(os.path.join(APP_DIR, "CHANGELOG.md"), encoding="utf-8") as fh:
         assert f"## {config['version']}" in fh.read(), "CHANGELOG.md has no entry for the current version"
 
 
 def test_runtime_requirements_are_fully_pinned():
     """Reproducible builds, and something for Renovate to track: every line is name==version."""
-    with open(os.path.join(ADDON, "requirements.txt"), encoding="utf-8") as fh:
+    with open(os.path.join(APP_DIR, "requirements.txt"), encoding="utf-8") as fh:
         lines = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
     assert lines, "kea/requirements.txt is empty"
     for line in lines:
@@ -120,7 +120,7 @@ def test_runtime_requirements_are_fully_pinned():
 
 
 def test_dockerfile_installs_the_pinned_requirements():
-    with open(os.path.join(ADDON, "Dockerfile"), encoding="utf-8") as fh:
+    with open(os.path.join(APP_DIR, "Dockerfile"), encoding="utf-8") as fh:
         text = fh.read()
     assert "COPY requirements.txt" in text and "pip install" in text and "-r /tmp/requirements.txt" in text
     assert not re.search(r"pip install[^\n]*==", text), "pin packages in requirements.txt, not in the Dockerfile"

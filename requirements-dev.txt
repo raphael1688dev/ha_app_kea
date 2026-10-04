@@ -1,4 +1,4 @@
-# Development / CI dependencies. The runtime set comes from the add-on itself.
+# Development / CI dependencies. The runtime set comes from the app itself.
 -r kea/requirements.txt
 httpx==0.28.1
 pytest==9.1.1

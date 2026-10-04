@@ -9,7 +9,7 @@
 
 | Level | Where | What |
 |---|---|---|
-| Deployment | Home Assistant add-on Configuration tab (`options`/`schema`) | `interface`, `enable_dhcp6`, **initial defaults only** (since v2.1.0 they are managed in the Web UI's Settings tab and stored in the `global` section of `settings.json`) |
+| Deployment | Home Assistant app Configuration tab (`options`/`schema`) | `interface`, `enable_dhcp6`, **initial defaults only** (since v2.1.0 they are managed in the Web UI's Settings tab and stored in the `global` section of `settings.json`) |
 | Operation | Web UI (Ingress) | Multiple IPv4/IPv6 subnets, pools, gateway, DNS, lease time, static reservations, lease list, service status |
 
 - Web UI settings are stored in `/config/kea/settings.json` and survive restarts.
@@ -26,7 +26,7 @@
 - Under a sub-path (Ingress) Stork needs a reverse proxy that rewrites URLs, and it has its own login system.
 - Editing subnets and reservations needs the `host_cmds` and `subnet_cmds` hook libraries loaded in Kea.
 - Fallback: if Stork's monitoring is ever wanted, run the official Stork containers separately instead of bundling
-  them into this add-on.
+  them into this app.
 - Note: the Stork information comes from documentation summaries; it was never deployed to verify.
 
 ## 4. Technical decisions
@@ -71,7 +71,7 @@
   convention: the last row per address wins, and lifetime 0 means deleted). CI proves that Kea accepts the row and
   starts normally afterwards, but not that Kea then treats the lease as deleted; that needs a full DHCP client
   exercise. The file state when Kea is stopped in the middle of lease file cleanup (LFC) has not been tested either.
-- **Real Home Assistant**: the Supervisor loading the add-on, the Ingress panel, the `app_config` mount and backups
+- **Real Home Assistant**: the Supervisor loading the app, the Ingress panel, the `app_config` mount and backups
   are only covered by static rule checks, not by an installation.
 - The sample subnet `192.168.1.0/24` is active from the first start.
 
