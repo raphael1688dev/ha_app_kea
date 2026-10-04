@@ -59,6 +59,10 @@
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
   .scroll { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
+  .span { grid-column: 1 / -1; }
+  textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+             background: var(--input-bg); color: var(--fg); }
+  td.good { color: var(--ok); } td.bad { color: var(--danger); } td.warnc { color: var(--warn); }
   .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; white-space: pre-wrap; }
   .banner.err { background: var(--err-bg); border: 1px solid var(--danger); }
   .banner.warn { background: var(--warn-bg); border: 1px solid var(--warn); }
@@ -103,7 +107,9 @@ const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "Leases"], ["logs
 const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6"], ["addon", "App"]];
 const MAX_LOG_LINES = 1500;
 
-let state = { status: null, saved: null, draft: null, leases: null, interfaces: null };
+let state = { status: null, saved: null, draft: null, leases: null, interfaces: null, ntp: {} };
+const ntpCheck = {};                              // last "Check NTP servers" result per subnet editor
+let importResult = null;                          // report of the last "Convert" of the old app's options
 let tab = "dhcp4";
 let dirty = false;
 let busy = false;
@@ -172,7 +178,7 @@ const LIST_FIELDS = ["dns", "domain_search", "ntp_servers"];   // edited as comm
 
 function toDraft(settings) {
   const d = JSON.parse(JSON.stringify(settings));
-  d.global = d.global || { interface: "eth0", enable_dhcp6: false };
+  d.global = Object.assign({ interface: "eth0", enable_dhcp6: false, authoritative: false, allow_shared_ips: false }, d.global);
   for (const fam of ["dhcp4", "dhcp6"]) {
     d[fam] = d[fam] || { subnets: [] };
     for (const s of d[fam].subnets) {
@@ -272,12 +278,85 @@ function reservationsEditor(fam, s) {
           addButton("+ Add reservation", rerender(() => s.reservations.push({ [idKey]: "", ip_address: "", hostname: "" })))];
 }
 
+// NTP servers: addresses or host names. The app resolves names itself every hour and sends only addresses that
+// really answer as NTP servers (Kea cannot resolve names), so show what is sent and offer a live check.
+function ntpField(fam, s, key) {
+  const v4 = fam === "dhcp4";
+  const names = String(s.ntp_servers || "").split(/[,\s]+/).filter(Boolean);
+  const sent = [].concat(...names.map((n) => (state.ntp[n.replace(/\.$/, "").toLowerCase()] || {}).addresses || []));
+  const notes = [];
+  if (v4 && sent.length && names.some((n) => !/^[0-9.]+$/.test(n)))
+    notes.push(h("div", { class: "muted small" }, "Addresses sent for the host names now: " + sent.join(", ")));
+  if (!v4) notes.push(h("div", { class: "muted small" },
+    "Host names are sent as names (clients look them up); many clients ignore DHCPv6 NTP servers."));
+  const result = ntpCheck[key];
+  const buttons = h("div", { class: "row" },
+    h("button", { class: "sm", onclick: () => checkNtp(fam, s, key) }, "Check NTP servers"),
+    h("button", { class: "sm", onclick: () => useThisMachine(fam, s) }, "Use this machine"),
+    v4 ? h("button", { class: "sm", onclick: refreshNtp }, "Refresh addresses now") : null);
+  return h("div", { class: "span" },
+    h("label", {}, "NTP servers (comma separated)"),
+    textInput(s, "ntp_servers", { placeholder: v4 ? "192.168.1.2, pool.ntp.org" : "2001:db8::123, pool.ntp.org" }),
+    notes, buttons, result ? ntpResultView(result) : null);
+}
+
+function ntpResultView(res) {
+  if (res.pending) return h("div", { class: "muted small" }, "Checking...");
+  const rows = [];
+  for (const srv of (res.report || { servers: [] }).servers) {
+    if (srv.error) rows.push(h("tr", {}, h("td", {}, srv.server), h("td", {}), h("td", { class: "bad" }, srv.error), h("td", {}), h("td", {})));
+    for (const a of srv.addresses) rows.push(h("tr", {},
+      h("td", {}, srv.server === a.address ? "" : srv.server),
+      h("td", { class: "mono" }, a.address),
+      h("td", { class: a.ok ? "good" : "bad" }, a.ok ? "answers" : a.reason),
+      h("td", {}, a.stratum == null ? "" : "stratum " + a.stratum),
+      h("td", {}, a.rtt == null ? "" : Math.round(a.rtt * 1000) + " ms")));
+  }
+  return h("div", {},
+    res.warning ? h("div", { class: "banner warn" }, res.warning) : null,
+    tableOf(["Entry", "Address", "Result", "", ""], rows, "Nothing to check"),
+    h("div", { class: "muted small" }, (res.usable || []).length + " usable address(es)."));
+}
+
+async function checkNtp(fam, s, key) {
+  ntpCheck[key] = { pending: true }; renderView();
+  const servers = String(s.ntp_servers || "").split(/[,\s]+/).filter(Boolean);
+  try { ntpCheck[key] = await sendJSON("POST", "ntp/check", { servers, version: fam === "dhcp6" ? 6 : 4 }); }
+  catch (e) { delete ntpCheck[key]; showErrors(e.errors); }
+  renderView();
+}
+
+async function loadNtp() {
+  try { state.ntp = await api("ntp"); } catch (e) { /* the note under the field is optional */ }
+}
+
+async function refreshNtp() {
+  showErrors(null);
+  try {
+    const res = await sendJSON("POST", "ntp/refresh");
+    await loadNtp(); renderView();
+    toast(res.changed ? "NTP addresses changed and Kea reloaded." : "NTP addresses checked; no change.");
+    if (res.warnings && res.warnings.length) showErrors(res.warnings, "warn");
+  } catch (e) { showErrors(e.errors); }
+}
+
+async function useThisMachine(fam, s) {
+  try {
+    const res = await api("host-addresses");
+    const found = fam === "dhcp6" ? res.ipv6 : res.ipv4;
+    if (!found.length) { showErrors(["No " + (fam === "dhcp6" ? "IPv6" : "IPv4") + " address found on " + res.interface +
+      ". Type the address of the machine that runs your NTP server."]); return; }
+    s.ntp_servers = found[0]; markDirty(); renderView();
+    toast("Set to " + found[0] + ". This works when an NTP server (for example the Chrony app) runs on this machine; use Check NTP servers to verify.");
+  } catch (e) { showErrors(e.errors); }
+}
+
 function advancedEditor(fam, s, key) {
   const v4 = fam === "dhcp4";
   const fields = [];
   if (v4) fields.push(field("Domain name", s, "domain_name", { placeholder: "home.lan" }));
   fields.push(field("Search domains (comma separated)", s, "domain_search", { placeholder: "home.lan, lan" }));
-  if (v4) fields.push(field("NTP servers (comma separated)", s, "ntp_servers", { placeholder: "192.168.1.2" }));
+  fields.push(ntpField(fam, s, key));
 
   const optRows = s.custom_options.map((o, i) => h("tr", {},
     h("td", {}, textInput(o, "name", { class: "mono", placeholder: "tftp-server-name" })),
@@ -310,6 +389,7 @@ function subnetCard(fam, subnets, idx) {
   if (v4) fields.push(field("Default gateway", s, "router", { placeholder: "192.168.1.1" }));
   fields.push(field("DNS servers (comma separated)", s, "dns"),
               field("Lease time (seconds)", s, "lease_time", { inputmode: "numeric" }));
+  if (v4) fields.push(field("Maximum lease time (seconds, optional)", s, "max_lease_time", { inputmode: "numeric", placeholder: "same as the lease time" }));
   return h("div", { class: "card" },
     h("div", { class: "row" },
       h("h3", { class: "grow" }, "Subnet #" + (idx + 1) + (s.subnet ? "  " + s.subnet : "")),
@@ -330,8 +410,8 @@ function renderFamily(fam) {
   if (!subnets.length) nodes.push(h("div", { class: "card empty" }, "No subnets configured. Kea will not hand out addresses without a subnet."));
   nodes.push(h("p", {}, h("button", { onclick: () => {
     subnets.push(Object.assign({ id: null, subnet: "", pools: [{ start: "", end: "" }], dns: "", domain_search: "",
-        custom_options: [], lease_time: 86400, reservations: [] },
-      fam === "dhcp4" ? { router: "", domain_name: "", ntp_servers: "" } : { pd_pools: [] }));
+        custom_options: [], lease_time: 86400, reservations: [], ntp_servers: "" },
+      fam === "dhcp4" ? { router: "", domain_name: "", max_lease_time: "" } : { pd_pools: [] }));
     markDirty(); renderView(); } }, "+ Add subnet")));
   document.getElementById("view").replaceChildren(...nodes);
 }
@@ -467,6 +547,35 @@ function renderLogs() {
 }
 
 // ------------------------------------------------------------- settings tab
+function checkRow(obj, key, label, help) {
+  return h("div", { style: "margin-bottom:8px" },
+    h("label", { class: "check" },
+      h("input", Object.assign({ type: "checkbox", onchange: (e) => { obj[key] = e.target.checked; markDirty(); } },
+        obj[key] ? { checked: true } : {})), label),
+    h("div", { class: "muted small" }, help));
+}
+
+function importReportView(res) {
+  if (!res) return null;
+  const icon = { error: "Error", warn: "Notice", info: "Info" };
+  const rows = res.report.map((i) => h("tr", {}, h("td", { class: i.level === "error" ? "bad" : i.level === "warn" ? "warnc" : "muted" }, icon[i.level]), h("td", {}, i.text)));
+  return h("div", {}, h("h4", {}, "Result"), tableOf(["", "What happened"], rows, "Nothing to report"));
+}
+
+async function onConvert() {
+  const box = document.getElementById("oldapp");
+  showErrors(null);
+  if (dirty && !confirm("You have unsaved changes. Loading the converted IPv4 settings replaces them. Continue?")) return;
+  importResult = { report: [{ level: "info", text: "Converting..." }] }; renderView();
+  try {
+    const res = await sendJSON("POST", "import/dhcp-server", { text: box.value });
+    importResult = res;
+    state.draft = toDraft(res.settings);
+    markDirty(); renderView();
+    toast("Converted and loaded into the editor. Review the result, then click Save & apply.");
+  } catch (e) { importResult = null; showErrors(e.errors); renderView(); }
+}
+
 function renderSettings() {
   const g = state.draft.global;
   const ifaces = (state.interfaces && state.interfaces.interfaces) || [];
@@ -483,8 +592,19 @@ function renderSettings() {
         h("div", {}, h("label", {}, "DHCPv6"),
           h("label", { class: "check" },
             h("input", Object.assign({ type: "checkbox", onchange: (e) => { g.enable_dhcp6 = e.target.checked; markDirty(); } },
-              g.enable_dhcp6 ? { checked: true } : {})), "Enable DHCPv6 server"))),
+              g.enable_dhcp6 ? { checked: true } : {})), "Enable DHCPv6 server")),
+        h("div", {}, h("label", {}, "DHCPv4 behaviour"),
+          checkRow(g, "authoritative", "Answer clients that ask for an unknown address",
+            "Kea then tells a client that its remembered address is not valid here, so it asks for a new one at once instead of waiting. Turn on if this is the only DHCP server on the network."),
+          checkRow(g, "allow_shared_ips", "Allow several devices to share one IP",
+            "For a device with a wired and a wireless interface: two MAC addresses, one reserved IP. Only one of them should be connected at a time."))),
       h("div", { class: "muted small" }, "Changing the interface restarts Kea. Turning DHCPv6 on or off only starts or stops the DHCPv6 service. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the app's Configuration tab are only the initial defaults.")),
+    h("div", { class: "card" },
+      h("h3", {}, "Import from the DHCP server app"),
+      h("p", { class: "muted" }, "Coming from the Home Assistant \"DHCP server\" app (ISC dhcpd)? Open that app's Configuration tab, switch to YAML, copy everything and paste it here. Your networks, devices, DNS, NTP and lease times are converted into the editor; nothing changes until you click Save & apply. Existing leases are not carried over."),
+      h("textarea", { id: "oldapp", rows: "8", spellcheck: "false", class: "mono", style: "width:100%", placeholder: "default_lease: 3600\nnetworks:\n  - subnet: 192.168.1.0\n    ..." }),
+      h("p", {}, h("button", { onclick: onConvert }, "Convert and load")),
+      importReportView(importResult)),
     h("div", { class: "card" },
       h("h3", {}, "Backup & restore"),
       h("p", { class: "muted" }, "Export downloads the saved settings. Import loads a settings file into the editor so you can review it; nothing changes until you click Save & apply."),
@@ -556,7 +676,9 @@ document.getElementById("save").addEventListener("click", async () => {
     const res = await sendJSON("PUT", "settings", state.draft);
     state.saved = res.settings; state.draft = toDraft(res.settings); state.status = res.status;
     clearDirty();
+    await loadNtp();
     toast(applyMessage(res));
+    if (res.warnings && res.warnings.length) showErrors(res.warnings, "warn");
   } catch (e) { showErrors(e.errors); }
   await setBusy(false);
   renderStatus(); renderView();
@@ -581,6 +703,7 @@ async function onRestart() {
 (async function init() {
   renderTabs();
   try { await loadAll(); } catch (e) { showErrors(e.errors); }
+  loadNtp().then(renderView);
   api("interfaces").then((r) => { state.interfaces = r; if (tab === "settings") renderView(); }).catch(() => {});
   loadLeases();
   setInterval(() => { if (!document.hidden && !busy) refreshStatus(); }, 5000);

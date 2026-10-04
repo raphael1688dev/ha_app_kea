@@ -21,18 +21,34 @@ _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
     r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
 )
+# Names of devices that are reserved an address. Real devices announce names such as "zhimi-fan-za5_mibtf763", so
+# underscores are accepted here (Kea does not sanitise reserved names); domains and search domains stay strict.
+_RESERVATION_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
+    r"(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*$"
+)
+NTP6_SPACE = "v6-ntp-server-suboptions"
+MAX_NTP_SERVERS = 16
 _IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")  # IFNAMSIZ is 16 incl. NUL
 _OPTION_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 # Options that have a dedicated field; a custom option must not shadow them.
 MANAGED_OPTIONS = {
     "routers", "domain-name-servers", "domain-name", "domain-search",
-    "ntp-servers", "dns-servers",
+    "ntp-servers", "dns-servers", "ntp-server",
 }
 
 
-def default_global(interface="eth0", enable_dhcp6=False):
-    return {"interface": interface, "enable_dhcp6": bool(enable_dhcp6)}
+def default_global(interface="eth0", enable_dhcp6=False, authoritative=False, allow_shared_ips=False):
+    """Settings that apply to the whole server.
+
+    authoritative: answer clients that ask for an address Kea does not know with a NAK instead of staying silent
+      (the old ISC dhcpd based DHCP server app always did this).
+    allow_shared_ips: several reservations may use the same IPv4 address (a device with a wired and a wireless
+      interface); needs Kea's ``ip-reservations-unique: false``.
+    """
+    return {"interface": interface, "enable_dhcp6": bool(enable_dhcp6),
+            "authoritative": bool(authoritative), "allow_shared_ips": bool(allow_shared_ips)}
 
 
 def default_settings(interface="eth0", enable_dhcp6=False):
@@ -52,6 +68,7 @@ def default_settings(interface="eth0", enable_dhcp6=False):
                     "ntp_servers": [],
                     "custom_options": [],
                     "lease_time": 86400,
+                    "max_lease_time": None,
                     "reservations": [],
                 }
             ]
@@ -65,6 +82,7 @@ def default_settings(interface="eth0", enable_dhcp6=False):
                     "pd_pools": [],
                     "dns": ["2606:4700:4700::1111", "2001:4860:4860::8888"],
                     "domain_search": [],
+                    "ntp_servers": [],
                     "custom_options": [],
                     "lease_time": 86400,
                     "reservations": [],
@@ -96,7 +114,16 @@ def migrate(raw):
 # Normalisers
 # --------------------------------------------------------------------------
 def normalize_mac(value):
-    raw = re.sub(r"[:\-.\s]", "", str(value or "")).lower()
+    """aa:bb:cc:dd:ee:ff from the usual spellings.
+
+    Separated octets may have one or two digits ("b0:a7:32:6:a5:18" is b0:a7:32:06:a5:18): Kea and ISC dhcpd both
+    accept that, so a device list written for dhcpd must too. Without separators (or Cisco style aabb.ccdd.eeff)
+    exactly 12 digits are needed.
+    """
+    text = str(value or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{1,2}([:-][0-9a-f]{1,2}){5}", text):
+        return ":".join(part.zfill(2) for part in re.split(r"[:-]", text))
+    raw = re.sub(r"[:\-.\s]", "", text)
     if not re.fullmatch(r"[0-9a-f]{12}", raw):
         return None
     return ":".join(raw[i:i + 2] for i in range(0, 12, 2))
@@ -131,6 +158,74 @@ def _parse_ip_list(value, version):
     return good, bad
 
 
+def ntp6_suboption(entry):
+    """Which DHCPv6 NTP suboption (RFC 5908) carries *entry*: an address, a multicast address or a host name."""
+    try:
+        address = ipaddress.ip_address(entry)
+    except ValueError:
+        return "ntp-server-fqdn"
+    return "ntp-server-multicast" if address.is_multicast else "ntp-server-address"
+
+
+def _parse_ntp4_list(value):
+    """DHCPv4 NTP servers: IPv4 addresses or host names (the app resolves names). Returns (entries, bad)."""
+    good, bad = [], []
+    for part in _split_list(value):
+        try:
+            address = ipaddress.ip_address(part)
+        except ValueError:
+            name = part.rstrip(".").lower()
+            (good if _HOSTNAME_RE.match(name) and not name.isdigit() else bad).append(name if _HOSTNAME_RE.match(name) else part)
+            continue
+        (good if address.version == 4 else bad).append(str(address) if address.version == 4 else part)
+    return good, bad
+
+
+def ntp_hostnames(settings):
+    """Host names (not addresses) used as DHCPv4 NTP servers anywhere in *settings*."""
+    names = []
+    for s in settings["dhcp4"]["subnets"]:
+        for entry in s.get("ntp_servers", []):
+            try:
+                ipaddress.ip_address(entry)
+            except ValueError:
+                if entry not in names:
+                    names.append(entry)
+    return names
+
+
+def _ntp4_addresses(entries, resolved):
+    """Replace host names by the addresses the app resolved and checked; unresolved names are left out."""
+    out = []
+    for entry in entries:
+        for address in (resolved or {}).get(entry, [entry] if _is_address(entry) else []):
+            if address not in out:
+                out.append(address)
+    return out
+
+
+def _is_address(text):
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _parse_ntp6_list(value):
+    """DHCPv6 NTP servers: IPv6 addresses, IPv6 multicast addresses or host names. Returns (entries, bad)."""
+    good, bad = [], []
+    for part in _split_list(value):
+        try:
+            address = ipaddress.ip_address(part)
+        except ValueError:
+            name = part.rstrip(".").lower()
+            (good if _HOSTNAME_RE.match(name) and not name.isdigit() else bad).append(name if _HOSTNAME_RE.match(name) else part)
+            continue
+        (good if address.version == 6 else bad).append(str(address) if address.version == 6 else part)
+    return good, bad
+
+
 def _parse_name_list(value):
     good, bad = [], []
     for part in _split_list(value):
@@ -162,11 +257,14 @@ def _validate_global(raw, fallback, errors):
     if not _IFACE_RE.match(interface):
         errors.append("network interface name is invalid "
                       "(1-15 characters: letters, digits, . _ : -)")
-    enable = raw.get("enable_dhcp6", base["enable_dhcp6"])
-    if not isinstance(enable, bool):
-        errors.append("enable_dhcp6 must be true or false")
-        enable = bool(base["enable_dhcp6"])
-    return {"interface": interface, "enable_dhcp6": enable}
+    out = {"interface": interface}
+    for key in ("enable_dhcp6", "authoritative", "allow_shared_ips"):
+        value = raw.get(key, base.get(key, False))
+        if not isinstance(value, bool):
+            errors.append(f"{key} must be true or false")
+            value = bool(base.get(key, False))
+        out[key] = value
+    return out
 
 
 def _validate_pools(raw_pools, version, network, where, errors):
@@ -284,7 +382,7 @@ def _validate_custom_options(raw_list, where, errors):
     return out
 
 
-def _validate_subnets(section, version, errors):
+def _validate_subnets(section, version, errors, allow_shared=False):
     label = "IPv4" if version == 4 else "IPv6"
     net_cls = ipaddress.IPv4Network if version == 4 else ipaddress.IPv6Network
 
@@ -345,10 +443,16 @@ def _validate_subnets(section, version, errors):
         item["domain_search"] = search
 
         if version == 4:
-            ntp, bad = _parse_ip_list(raw.get("ntp_servers"), 4)
+            ntp, bad = _parse_ntp4_list(raw.get("ntp_servers"))
             if bad:
-                errors.append(f"{where}: NTP server is invalid: {', '.join(bad)}")
-            item["ntp_servers"] = ntp
+                errors.append(f"{where}: NTP server is invalid (an IPv4 address or a host name): {', '.join(bad)}")
+        else:
+            ntp, bad = _parse_ntp6_list(raw.get("ntp_servers"))
+            if bad:
+                errors.append(f"{where}: NTP server is invalid (an IPv6 address or a host name): {', '.join(bad)}")
+        if len(ntp) > MAX_NTP_SERVERS:
+            errors.append(f"{where}: at most {MAX_NTP_SERVERS} NTP servers")
+        item["ntp_servers"] = ntp
 
         item["custom_options"] = _validate_custom_options(raw.get("custom_options"), where, errors)
 
@@ -360,6 +464,18 @@ def _validate_subnets(section, version, errors):
             errors.append(f"{where}: lease time must be between {LEASE_MIN} and {LEASE_MAX} seconds")
             lease = 86400
         item["lease_time"] = lease
+
+        if version == 4:
+            raw_max = raw.get("max_lease_time")
+            if raw_max in (None, ""):
+                item["max_lease_time"] = None
+            else:
+                maximum = _parse_int(raw_max)
+                if maximum is None or not LEASE_MIN <= maximum <= LEASE_MAX:
+                    errors.append(f"{where}: maximum lease time must be between {LEASE_MIN} and {LEASE_MAX} seconds")
+                elif maximum < lease:
+                    errors.append(f"{where}: maximum lease time must not be smaller than the lease time")
+                item["max_lease_time"] = maximum
 
         # id (stable, so lease files keep matching their subnet)
         sid = _parse_int(raw.get("id"))
@@ -391,14 +507,18 @@ def _validate_subnets(section, version, errors):
             if a.overlaps(b):
                 errors.append(f"{label}: subnets {a} and {b} overlap")
 
-    # reserved IPs must be unique across the whole section
-    seen = set()
-    for item in cleaned:
-        for res in item["reservations"]:
-            ip = res["ip_address"]
-            if ip in seen:
-                errors.append(f"{label}: reservation IP {ip} is duplicated")
-            seen.add(ip)
+    # Reserved IPs must be unique across the section, unless sharing is switched on (IPv4 only): a device with a
+    # wired and a wireless interface has two MAC addresses and one IP. A MAC may still be listed only once per subnet.
+    if not (allow_shared and version == 4):
+        seen = set()
+        for item in cleaned:
+            for res in item["reservations"]:
+                ip = res["ip_address"]
+                if ip in seen:
+                    errors.append(f"{label}: reservation IP {ip} is duplicated" +
+                                  (" (turn on \"Allow several devices to share one IP\" in Settings if one device has "
+                                   "two network interfaces)" if version == 4 else ""))
+                seen.add(ip)
     return cleaned
 
 
@@ -435,8 +555,8 @@ def _validate_reservations(raw_list, version, network, where, errors):
             errors.append(f"{rwhere}: IP is invalid")
 
         hostname = str(raw.get("hostname", "") or "").strip()
-        if hostname and not _HOSTNAME_RE.match(hostname):
-            errors.append(f"{rwhere}: hostname is invalid")
+        if hostname and not _RESERVATION_HOSTNAME_RE.match(hostname):
+            errors.append(f"{rwhere}: hostname is invalid (letters, digits, hyphens and underscores)")
 
         out.append({ident_key: ident, "ip_address": ip_text, "hostname": hostname})
     return out
@@ -452,10 +572,12 @@ def validate(raw, fallback_global=None):
     if not isinstance(raw, dict):
         return None, ["invalid settings format"]
     raw = migrate(raw)
+    settings_global = _validate_global(raw.get("global"), fallback_global, errors)
     cleaned = {
         "version": SETTINGS_VERSION,
-        "global": _validate_global(raw.get("global"), fallback_global, errors),
-        "dhcp4": {"subnets": _validate_subnets(raw.get("dhcp4"), 4, errors)},
+        "global": settings_global,
+        "dhcp4": {"subnets": _validate_subnets(raw.get("dhcp4"), 4, errors,
+                                               allow_shared=settings_global["allow_shared_ips"])},
         "dhcp6": {"subnets": _validate_subnets(raw.get("dhcp6"), 6, errors)},
     }
     return cleaned, errors
@@ -476,7 +598,7 @@ def _option(name, data):
     return {"name": name, "data": data}
 
 
-def render_dhcp4(settings, lease_file):
+def render_dhcp4(settings, lease_file, ntp_addresses=None):
     subnets = []
     for s in settings["dhcp4"]["subnets"]:
         options = []
@@ -488,8 +610,9 @@ def render_dhcp4(settings, lease_file):
             options.append(_option("domain-name", s["domain_name"]))
         if s.get("domain_search"):
             options.append(_option("domain-search", ", ".join(s["domain_search"])))
-        if s.get("ntp_servers"):
-            options.append(_option("ntp-servers", ", ".join(s["ntp_servers"])))
+        ntp = _ntp4_addresses(s.get("ntp_servers", []), ntp_addresses)
+        if ntp:
+            options.append(_option("ntp-servers", ", ".join(ntp)))
         options += [_option(o["name"], o["data"]) for o in s.get("custom_options", [])]
         entry = {
             "id": s["id"],
@@ -498,6 +621,8 @@ def render_dhcp4(settings, lease_file):
             "valid-lifetime": s["lease_time"],
             "option-data": options,
         }
+        if s.get("max_lease_time"):
+            entry["max-valid-lifetime"] = s["max_lease_time"]
         if s["reservations"]:
             entry["reservations"] = [
                 _drop_empty({
@@ -508,19 +633,22 @@ def render_dhcp4(settings, lease_file):
                 for r in s["reservations"]
             ]
         subnets.append(entry)
-    return {
-        "Dhcp4": {
-            "interfaces-config": {"interfaces": [settings["global"]["interface"]],
-                                  "dhcp-socket-type": "raw"},
-            "lease-database": {
-                "type": "memfile", "persist": True,
-                "name": lease_file, "lfc-interval": 3600,
-            },
-            "valid-lifetime": 86400,
-            "subnet4": subnets,
-            "loggers": _logger("kea-dhcp4"),
-        }
+    server = {
+        "interfaces-config": {"interfaces": [settings["global"]["interface"]],
+                              "dhcp-socket-type": "raw"},
+        "lease-database": {
+            "type": "memfile", "persist": True,
+            "name": lease_file, "lfc-interval": 3600,
+        },
+        "valid-lifetime": 86400,
+        "subnet4": subnets,
+        "loggers": _logger("kea-dhcp4"),
     }
+    if settings["global"].get("authoritative"):
+        server["authoritative"] = True
+    if settings["global"].get("allow_shared_ips"):
+        server["ip-reservations-unique"] = False
+    return {"Dhcp4": server}
 
 
 def render_dhcp6(settings, lease_file):
@@ -531,6 +659,11 @@ def render_dhcp6(settings, lease_file):
             options.append(_option("dns-servers", ", ".join(s["dns"])))
         if s.get("domain_search"):
             options.append(_option("domain-search", ", ".join(s["domain_search"])))
+        if s.get("ntp_servers"):
+            # RFC 5908: option 56 is a container; every server is a suboption (Kea allows several of one kind).
+            options.append({"name": "ntp-server"})
+            options += [{"name": ntp6_suboption(server), "space": NTP6_SPACE, "data": server}
+                        for server in s["ntp_servers"]]
         options += [_option(o["name"], o["data"]) for o in s.get("custom_options", [])]
         entry = {
             "id": s["id"],

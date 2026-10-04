@@ -427,3 +427,219 @@ def test_a_hanging_config_test_is_a_problem_not_a_crash(mgr, good, monkeypatch):
     result = mgr.apply(good)
     assert result["ok"] is False and "could not test the configuration" in result["errors"][0]
     assert not os.path.exists(mgr._conf_path("dhcp4", ".new"))              # staging cleaned up
+
+
+# ------------------------------------------------------------------ NTP host names (resolved by the app)
+def ntp_probe(alive):
+    def probe(address, **_):
+        ok = address in alive
+        return {"address": address, "ok": ok, "reason": "ok" if ok else "no answer",
+                "stratum": 2 if ok else None, "offset": 0.0 if ok else None, "rtt": 0.01 if ok else None}
+    return probe
+
+
+def ntp_resolver(table):
+    def resolver(name, port, family, kind):
+        import socket
+        if name not in table:
+            raise socket.gaierror(-2, "Name or service not known")
+        return [(family, kind, 17, "", (a, 0)) for a in table[name]]
+    return resolver
+
+
+def with_ntp_names(good, *names):
+    good["dhcp4"]["subnets"][0]["ntp_servers"] = list(names)
+    return good
+
+
+def ntp_option(m):
+    with open(m._conf_path("dhcp4"), encoding="utf-8") as fh:
+        options = json.load(fh)["Dhcp4"]["subnet4"][0]["option-data"]
+    return next((o["data"] for o in options if o["name"] == "ntp-servers"), None)
+
+
+def test_ntp_names_are_resolved_checked_and_written_as_addresses(mgr, good):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1", "198.51.100.2"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1", "198.51.100.2", "198.51.100.3"]})
+    mgr.startup()
+    result = mgr.apply(with_ntp_names(good, "pool.test", "203.0.113.7"))
+    assert result["ok"], result
+    assert ntp_option(mgr) == "198.51.100.1, 198.51.100.2, 203.0.113.7"        # .3 did not answer
+    assert mgr.settings["dhcp4"]["subnets"][0]["ntp_servers"] == ["pool.test", "203.0.113.7"]   # names are kept
+    with open(mgr.ntp_path, encoding="utf-8") as fh:
+        assert json.load(fh)["pool.test"]["addresses"] == ["198.51.100.1", "198.51.100.2"]
+
+
+def test_a_name_that_does_not_resolve_is_saved_but_not_sent_and_warned_about(mgr, good):
+    mgr.ntp_resolver = ntp_resolver({})
+    mgr.startup()
+    result = mgr.apply(with_ntp_names(good, "gone.test"))
+    assert result["ok"] and ntp_option(mgr) is None
+    assert any("gone.test" in w and "not sent to clients" in w for w in result["warnings"])
+
+
+def test_refresh_reloads_kea_only_when_the_addresses_changed(mgr, good):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1", "198.51.100.2"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))
+    first = pid(mgr)
+    assert mgr.refresh_ntp(force=True) == {"ok": True, "changed": False, "warnings": []}
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.2"]})            # the pool hands out another one
+    assert mgr.refresh_ntp(force=True)["changed"]
+    assert ntp_option(mgr) == "198.51.100.1, 198.51.100.2"                       # the old good one is kept first
+    assert pid(mgr) == first                                                      # SIGHUP, not a restart
+    assert "NTP servers changed" in log_text(mgr)
+
+
+def test_refresh_keeps_the_last_good_addresses_during_a_dns_outage(mgr, good):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))
+    mgr.ntp_resolver = ntp_resolver({})                       # DNS is down, the server itself still answers
+    assert mgr.refresh_ntp(force=True)["warnings"] == [] and not mgr.ntp_status()["pool.test"]["stale"]
+    mgr.ntp_probe = ntp_probe(set())                          # and now nothing answers either
+    result = mgr.refresh_ntp(force=True)
+    assert result["ok"] and not result["changed"] and "pool.test" in result["warnings"][0]
+    assert ntp_option(mgr) == "198.51.100.1"
+    assert mgr.ntp_status()["pool.test"]["stale"]
+
+
+def test_names_not_yet_due_are_not_resolved_again(mgr, good):
+    calls = []
+    mgr.ntp_probe = ntp_probe({"198.51.100.1"})
+    base = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    mgr.ntp_resolver = lambda *a: calls.append(a[0]) or base(*a)
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))
+    calls.clear()
+    assert mgr.refresh_ntp() == {"ok": True, "changed": False}
+    assert calls == []
+
+
+def test_a_failed_reload_restores_the_previous_ntp_addresses(mgr, good):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1", "198.51.100.2"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))
+    orig = cfg.render_dhcp4
+    cfg.render_dhcp4 = lambda *a, **k: dict(orig(*a, **k), marker="FAIL_ME")
+    try:
+        mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.2"]})
+        result = mgr.refresh_ntp(force=True)
+    finally:
+        cfg.render_dhcp4 = orig
+    assert not result["ok"]
+    assert mgr.ntp["pool.test"]["addresses"] == ["198.51.100.1"]
+
+
+def test_removed_names_are_forgotten(mgr, good):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))
+    mgr.apply(with_ntp_names(cfg.default_settings(), "203.0.113.7"))
+    assert mgr.ntp == {}
+
+
+def test_check_ntp_for_the_web_ui(mgr):
+    mgr.ntp_probe = ntp_probe({"198.51.100.1"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1", "198.51.100.2"]})
+    out = mgr.check_ntp(["pool.test"])
+    assert out["ok"] and out["usable"] == ["198.51.100.1"] and out["warning"] == ""
+    assert not mgr.check_ntp("pool.test")["ok"]
+    assert not mgr.check_ntp(["x"] * 17)["ok"]
+
+
+def test_ntp_names_survive_a_restart_without_new_network_access(tmp_path, fake_kea):
+    first = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
+    first.settle_seconds, first.reload_grace = 0.4, 0
+    first.ntp_probe = ntp_probe({"198.51.100.1"})
+    first.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    first.startup()
+    first.apply(with_ntp_names(cfg.default_settings(), "pool.test"))
+    first.shutdown()
+    second = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
+    second.ntp_resolver = ntp_resolver({})                  # offline: must use the saved addresses
+    second.ntp_probe = ntp_probe(set())
+    second.startup()
+    try:
+        assert ntp_option(second) == "198.51.100.1"
+    finally:
+        second.shutdown()
+
+
+# ------------------------------------------------------------------ import from the old DHCP server app
+OLD_APP = """
+default_lease: 3600
+dns: [192.0.2.53]
+ntp: [pool.test]
+domain: example.lan
+networks:
+  - {subnet: 192.168.1.0, netmask: 255.255.255.0, gateway: 192.168.1.1, interface: eth0,
+     range_start: 192.168.1.100, range_end: 192.168.1.150}
+hosts:
+  - {name: printer, mac: "aa:bb:cc:dd:ee:01", ip: 192.168.1.10}
+"""
+
+
+def test_import_from_the_old_app_is_a_draft_and_keeps_ipv6(mgr, good):
+    mgr.startup()
+    v6 = good
+    v6["global"]["enable_dhcp6"] = True
+    assert mgr.apply(v6)["ok"]
+    before = json.dumps(mgr.settings, sort_keys=True)
+    result = mgr.import_dhcp_server(OLD_APP)
+    assert result["ok"] and result["settings"]["dhcp4"]["subnets"][0]["reservations"][0]["hostname"] == "printer"
+    assert result["settings"]["global"]["enable_dhcp6"] is True
+    assert result["settings"]["dhcp6"] == mgr.settings["dhcp6"]
+    assert json.dumps(mgr.settings, sort_keys=True) == before            # nothing was applied
+
+
+def test_import_from_the_old_app_reports_unusable_input(mgr):
+    mgr.startup()
+    assert not mgr.import_dhcp_server("")["ok"]
+    assert "not valid YAML" in mgr.import_dhcp_server("a: [1")["errors"][0]
+    out = mgr.import_dhcp_server("hosts: []")
+    assert not out["ok"] and "no networks" in out["errors"][0]
+
+
+def test_host_addresses_have_the_expected_shape(mgr):
+    mgr.startup()
+    out = mgr.host_addresses()
+    assert out["interface"] == "eth0" and set(out) == {"interface", "ipv4", "ipv6"}
+
+
+def test_startup_never_waits_for_dns(tmp_path, fake_kea):
+    first = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
+    first.settle_seconds, first.reload_grace = 0.4, 0
+    first.ntp_probe = ntp_probe({"198.51.100.1"})
+    first.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    first.startup()
+    first.apply(with_ntp_names(cfg.default_settings(), "pool.test"))
+    first.shutdown()
+    calls = []
+
+    def slow_dns(*args):
+        calls.append(args[0])
+        raise AssertionError("startup must not resolve names")
+    second = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
+    second.ntp_resolver = slow_dns
+    second.ntp_refresh_seconds = 0                          # the saved addresses are "due", and still used
+    second.startup()
+    try:
+        assert calls == [] and ntp_option(second) == "198.51.100.1"
+    finally:
+        second.shutdown()
+
+
+def test_a_name_never_resolved_is_filled_in_after_start_without_delaying_kea(mgr, good):
+    mgr.startup()
+    mgr.apply(with_ntp_names(good, "pool.test"))             # nothing resolves yet
+    mgr.ntp.clear()                                          # as after a first start: no saved addresses at all
+    assert ntp_option(mgr) is None
+    mgr.ntp_probe = ntp_probe({"198.51.100.1"})
+    mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
+    first = pid(mgr)
+    assert mgr.refresh_ntp()["changed"] and ntp_option(mgr) == "198.51.100.1" and pid(mgr) == first

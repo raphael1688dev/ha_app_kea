@@ -155,3 +155,44 @@ def test_real_kea_really_starts_and_opens_the_lease_file(tmp_path):
         output = proc.communicate(timeout=15)[0]
     assert exited is None, f"kea-dhcp4 exited with {exited}:\n{output}"
     assert "MEMFILE_FAILED_TO_OPEN" not in output and "CONFIG_LOAD_FAIL" not in output, output
+
+
+# ---- features added for people coming from the ISC dhcpd based DHCP server app -------------------------------
+def migration_settings():
+    """What migrate.convert() produces: shared IPs, authoritative, underscore names, max lease, NTP in v4 and v6."""
+    s = cfg.default_settings("eth0", True)
+    s["global"].update(authoritative=True, allow_shared_ips=True)
+    v4 = s["dhcp4"]["subnets"][0]
+    v4.update(lease_time=3600, max_lease_time=7200, ntp_servers=["0.pool.example", "192.168.1.2"])
+    v4["reservations"] = [
+        {"hw_address": "b0:a7:32:06:a5:18", "ip_address": "192.168.1.50", "hostname": "zhimi-fan_za5"},
+        {"hw_address": "b0:a7:32:06:a5:19", "ip_address": "192.168.1.50", "hostname": "zhimi-fan_za5-wifi"}]
+    s["dhcp6"]["subnets"][0]["ntp_servers"] = ["2001:db8::123", "ff05::101", "pool.example"]
+    return s
+
+
+def test_migration_features_are_accepted_by_kea(tmp_path):
+    clean, errors = cfg.validate(migration_settings())
+    assert errors == []
+    r4 = cfg.render_dhcp4(clean, str(tmp_path / "leases4.csv"), {"0.pool.example": ["198.51.100.1", "198.51.100.2"]})
+    r6 = cfg.render_dhcp6(clean, str(tmp_path / "leases6.csv"))
+    assert r4["Dhcp4"]["ip-reservations-unique"] is False and r4["Dhcp4"]["authoritative"] is True
+    for binary, rendered in (("kea-dhcp4", r4), ("kea-dhcp6", r6)):
+        result = run_test(binary, rendered, tmp_path)
+        assert result.returncode == 0, f"{binary} rejected the config:\n{result.stdout}{result.stderr}"
+
+
+def test_kea_refuses_shared_ips_unless_told_otherwise(tmp_path):
+    """Pins the reason for the setting: with Kea's default, two reservations for one IP are an error."""
+    clean, errors = cfg.validate(migration_settings())
+    assert errors == []
+    rendered = cfg.render_dhcp4(clean, str(tmp_path / "leases4.csv"))
+    del rendered["Dhcp4"]["ip-reservations-unique"]
+    assert run_test("kea-dhcp4", rendered, tmp_path).returncode != 0
+
+
+def test_a_reserved_name_with_an_underscore_is_accepted_by_kea(tmp_path):
+    s = cfg.default_settings()
+    s["dhcp4"]["subnets"][0]["reservations"] = [
+        {"hw_address": "aa:bb:cc:dd:ee:01", "ip_address": "192.168.1.50", "hostname": "zhimi-fan-za5_mibtf763"}]
+    assert_accepted(s, tmp_path)

@@ -54,13 +54,15 @@ no longer used.
 | Default gateway | IPv4 only. Your router; must be inside the subnet. Optional. |
 | DNS servers (comma separated) | Addresses of the DNS servers clients should use. IPv4 addresses in the IPv4 tab, IPv6 in the IPv6 tab. |
 | Lease time (seconds) | How long a client may keep an address before it must renew: 60 to 31,536,000. Default 86,400 (one day). |
+| Maximum lease time (seconds, optional) | IPv4 only. The longest lease a client may ask for; leave empty to use the lease time. Not smaller than the lease time. |
 | Address pools | The ranges handed out automatically, each with a start and an end address inside the subnet. You can have several; they must not overlap. A subnet with no pool only serves its reservations. |
 | Reservations | Fixed addresses for specific devices, see below. |
 
-**Reservations.** Identify the device by its **MAC address** (IPv4; written with `:`, `-` or `.` as you like) or
-its **DUID** (IPv6, hexadecimal), give it a **Reserved IP** inside the subnet, and optionally a **Hostname**. An
-address can be reserved only once, and a MAC/DUID only once per subnet. The reserved address may lie inside or
-outside the pools.
+**Reservations.** Identify the device by its **MAC address** (IPv4; written with `:`, `-` or `.` as you like, and a
+single digit per part such as `b0:a7:32:6:a5:18` is understood) or its **DUID** (IPv6, hexadecimal), give it a
+**Reserved IP** inside the subnet, and optionally a **Hostname** (letters, digits, hyphens and underscores). An
+address can be reserved only once, unless you turn on *Allow several devices to share one IP* in the Settings
+tab; a MAC/DUID can be reserved only once per subnet. The reserved address may lie inside or outside the pools.
 
 **Advanced options** (fold-out at the bottom of each card):
 
@@ -68,13 +70,29 @@ outside the pools.
 |---|---|
 | Domain name | IPv4 only. The local domain handed to clients, for example `home.lan`. |
 | Search domains (comma separated) | Domains clients append when they look up short names. |
-| NTP servers (comma separated) | IPv4 only. Time servers for clients. |
+| NTP servers (comma separated) | Time servers for clients: IP addresses, or host names such as `pool.ntp.org`. See *NTP servers* below. |
 | Custom DHCP options | Any other option by its Kea name (for example `tftp-server-name` or `boot-file-name`) and its value. Names are lowercase (letters, digits and hyphens), each option may appear once per subnet, and the value is text of up to 255 characters. Kea checks the name and value when you apply. Options that have their own field above cannot be repeated here. |
 | Prefix delegation pools | IPv6 only. Prefixes handed to routers behind this one: *Prefix* (no host bits), *Prefix length* and *Delegated length* (not smaller than the prefix length). |
+
+**NTP servers.** In the IPv4 tab you can enter host names, but DHCP can only carry addresses. The app therefore
+looks the names up itself when you save and then every hour, asks every address it finds whether it really answers
+as a time server (and has a sane clock), and gives clients only the ones that do. Addresses that still work are
+kept, so Kea is reloaded only when the list really changes; if a lookup fails, the previous addresses stay. Below
+the field you see which addresses are sent now. **Check NTP servers** tests what you typed without saving,
+**Refresh addresses now** repeats the lookup, and **Use this machine** fills in this machine's own address
+(use it when an NTP server such as the Chrony app runs on the Home Assistant machine; Chrony must allow
+clients and publish UDP port 123). In the IPv6 tab, addresses and multicast addresses are sent as they are and host
+names are sent as names for the client to look up; many systems ignore DHCPv6 time servers.
 
 ### Settings tab
 
 - **Network interface** and **Enable DHCPv6 server**. Changing the interface restarts Kea.
+- **Answer clients that ask for an unknown address:** when a device asks for the address it had before and Kea
+  does not know it, Kea says no at once so the device asks for a new one, instead of waiting. Turn it on when this is
+  the only DHCP server on the network (the old DHCP server app always did this).
+- **Allow several devices to share one IP:** for a device with a wired and a wireless connection that have two MAC
+  addresses and one reserved address. Only one of them should be connected at a time.
+- **Import from the DHCP server app:** see *Moving from the DHCP server app* below.
 - **Export settings** downloads your saved settings as one file. **Import settings** loads such a file into
   the editor so you can look it over; nothing changes until you click **Save & apply**.
 
@@ -93,6 +111,21 @@ outside the pools.
 - **Logs tab:** the live Kea and app log, filterable by daemon or text. The same output is in the app's
   normal log page.
 
+## Moving from the DHCP server app
+
+If you used Home Assistant's "DHCP server" app (the one based on ISC dhcpd):
+
+1. Open that app's **Configuration** tab, switch to YAML and copy all of it.
+2. In this app's **Settings** tab, paste it under **Import from the DHCP server app** and click
+   **Convert and load**. Networks, devices, DNS, NTP servers, domain and lease times are loaded into the editor.
+   A report lists what was changed or could not be carried over (for example a MAC address that is invalid, or
+   used twice).
+3. Look at the IPv4 tab, use **Check NTP servers** if you entered time servers, then click **Save & apply**.
+4. Stop the old app **before** you start this one, and give the Home Assistant machine a fixed address first.
+   Existing leases are not carried over: devices get their address again when they renew, which takes at most one
+   lease time (turn **Answer clients that ask for an unknown address** on, as the conversion does, so that happens
+   quickly). To go back, stop this app and start the old one.
+
 ## IPv6 (DHCPv6)
 
 Turn it on in the **Settings** tab, then configure the subnet in the **IPv6** tab. The sample `fd00::/64` is a
@@ -110,10 +143,11 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 | `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
 | Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows what Kea writes at its default level (start-up, reloads, errors and similar events); individual DHCP packets are not logged. |
 | IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
+| Notice that an NTP server "is not sent to clients" | None of the addresses of that host name answered as a time server (or the name could not be looked up). Use **Check NTP servers** to see why; the app tries again every five minutes. |
 
 ## Your data
 
-Settings (`settings.json`) and the lease files are stored in the app's own config folder
+Settings (`settings.json`), the addresses found for NTP host names (`ntp-servers.json`) and the lease files are stored in the app's own config folder
 (`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the app.
 <!-- guide:end -->
 

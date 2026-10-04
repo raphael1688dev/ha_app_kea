@@ -6,11 +6,14 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
 
 import leases as lease_files
+import migrate
+import ntpcheck
 import settings as cfg
 
 DAEMONS = {
@@ -25,10 +28,33 @@ SETTLE_SECONDS = 1.5
 RELOAD_GRACE = 2.0       # a daemon younger than this may not have installed its SIGHUP handler yet
 FAIL_MARKERS = ("RECONFIGURATION_FAIL", "CONFIG_LOAD_FAIL", "INIT_FAIL")
 LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
+NTP_RETRY_SECONDS = 300  # a host name with no working address is tried again after this long
 
 
 def log(message):
     print(f"[kea-app] {message}", flush=True)
+
+
+def addresses_of(interface):
+    """IPv4 and global IPv6 addresses of *interface* ({"ipv4": [...], "ipv6": [...]}); empty where unknown."""
+    found = {"ipv4": [], "ipv6": []}
+    try:
+        import fcntl
+        import struct
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            packed = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack("256s", interface.encode()[:15]))   # SIOCGIFADDR
+        found["ipv4"].append(socket.inet_ntoa(packed[20:24]))
+    except (OSError, ImportError, UnicodeError):
+        pass
+    try:
+        with open("/proc/net/if_inet6", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 6 and parts[5] == interface and parts[3] == "00":          # scope 0 = global
+                    found["ipv6"].append(str(ipaddress.ip_address(bytes.fromhex(parts[0]))))
+    except (OSError, ValueError):
+        pass
+    return found
 
 
 def load_options(path):
@@ -50,6 +76,12 @@ class KeaManager:
         self.default_global = cfg.default_global(
             str(options.get("interface") or "eth0"), bool(options.get("enable_dhcp6")))
         self.settings_path = os.path.join(data_dir, "settings.json")
+        self.ntp_path = os.path.join(data_dir, "ntp-servers.json")
+        self.ntp = {}                       # host name -> {"addresses", "checked", "error", "stale"}
+        self.ntp_refresh_seconds = ntpcheck.REFRESH_SECONDS
+        self.ntp_first_delay = 5            # seconds after start before names that were never resolved are looked up
+        self.ntp_probe = ntpcheck.query     # replaced in tests
+        self.ntp_resolver = socket.getaddrinfo
 
         self.lock = threading.RLock()
         self.procs = {}
@@ -160,10 +192,142 @@ class KeaManager:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         os.replace(tmp, self.settings_path)
 
+    # ---------------------------------------------------- NTP host names
+    # Kea cannot resolve names when it answers a client (ISC dhcpd did, per request, cached for an hour), so the app
+    # keeps the names in the settings, resolves and checks them itself, and puts the addresses into Kea's config.
+    def _ntp_addresses(self):
+        return {name: entry["addresses"] for name, entry in self.ntp.items()}
+
+    def _load_ntp(self):
+        try:
+            with open(self.ntp_path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            self.ntp = {n: {"addresses": [a for a in e["addresses"] if isinstance(a, str)],
+                            "checked": float(e.get("checked", 0)), "error": str(e.get("error", "")),
+                            "stale": bool(e.get("stale"))}
+                        for n, e in raw.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.ntp = {}
+
+    def _save_ntp(self):
+        tmp = self.ntp_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.ntp, fh, indent=2)
+            os.replace(tmp, self.ntp_path)
+        except OSError as exc:
+            self._log(f"cannot save {self.ntp_path}: {exc}")
+
+    def _ntp_due(self, names, force=False):
+        now = time.time()
+        return [n for n in names
+                if force or n not in self.ntp
+                or now - self.ntp[n]["checked"] >= (self.ntp_refresh_seconds if self.ntp[n]["addresses"]
+                                                    else NTP_RETRY_SECONDS)]
+
+    def _resolve_ntp(self, data, force=False):
+        """Resolve and check the NTP host names of *data* that are missing or due. Returns (new entries, report).
+
+        Slow (network), so call it without holding the lock.
+        """
+        names = self._ntp_due(cfg.ntp_hostnames(data), force)
+        if not names:
+            return {}, None
+        return ntpcheck.refresh(names, self.ntp, probe=self.ntp_probe, resolver=self.ntp_resolver)
+
+    def _ntp_warnings(self, names, entries):
+        out = []
+        for name in names:
+            entry = entries.get(name) or self.ntp.get(name)
+            if entry and not entry["addresses"]:
+                out.append(f"NTP server {name}: no address passed the check ({entry['error']}). "
+                           "It is not sent to clients until it does.")
+            elif entry and entry["stale"]:
+                out.append(f"NTP server {name}: the check failed ({entry['error']}); keeping the previous addresses.")
+        return out
+
+    def refresh_ntp(self, force=False):
+        """Re-resolve the NTP names (due ones, or all with *force*) and reload Kea if the addresses changed."""
+        with self.lock:
+            data = self.settings
+        if data is None:
+            return {"ok": True, "changed": False}
+        entries, report = self._resolve_ntp(data, force)
+        if not entries:
+            return {"ok": True, "changed": False}
+        with self.lock:
+            if self.settings is not data:                  # settings changed meanwhile; the next round handles it
+                return {"ok": True, "changed": False}
+            before = self._ntp_addresses()
+            old_state = dict(self.ntp)
+            self.ntp.update(entries)
+            for gone in set(self.ntp) - set(cfg.ntp_hostnames(data)):
+                del self.ntp[gone]
+            changed = before != self._ntp_addresses()
+            self._save_ntp()
+            warnings = self._ntp_warnings(list(entries), entries)
+            for line in warnings:
+                self._log(line)
+            if not changed:
+                return {"ok": True, "changed": False, "warnings": warnings}
+            problems = self._reload_current()
+            if problems:
+                self.ntp = old_state
+                self._save_ntp()
+                return {"ok": False, "errors": problems}
+            self._log("NTP servers changed: " + "; ".join(
+                f"{n} -> {', '.join(e['addresses']) or 'none'}" for n, e in self.ntp.items()))
+            return {"ok": True, "changed": True, "warnings": warnings}
+
+    def _reload_current(self):
+        """Render the current settings again (e.g. new NTP addresses) and reload Kea. Returns problems."""
+        problems = self._stage_and_test(self.settings)
+        if problems:
+            return problems
+        snapshot = self._snapshot()
+        previous = self.settings
+        self._commit_staged(self.settings)
+        with self._log_lock:
+            mark = self._log_seq
+        self._activate(previous)
+        failures = self._settle(mark)
+        if failures:
+            self._rollback(previous, snapshot)
+            return failures + ["The previous configuration was restored."]
+        return []
+
+    def check_ntp(self, servers, version=4):
+        """Check a list of NTP servers (addresses or names) typed in the Web UI, without saving anything."""
+        if not isinstance(servers, list) or not all(isinstance(x, str) for x in servers):
+            return {"ok": False, "errors": ["servers must be a list of text values"]}
+        if len(servers) > cfg.MAX_NTP_SERVERS:
+            return {"ok": False, "errors": [f"at most {cfg.MAX_NTP_SERVERS} NTP servers"]}
+        family = socket.AF_INET6 if version == 6 else socket.AF_INET
+        report = ntpcheck.check_servers(servers, families=(family,), probe=self.ntp_probe,
+                                        resolver=self.ntp_resolver)
+        return {"ok": True, "report": report, "usable": ntpcheck.usable_addresses(report),
+                "warning": ntpcheck.clock_warning(report)}
+
+    def ntp_loop(self):
+        """Background loop: keep the resolved NTP addresses fresh (one hour, like dhcpd's cache)."""
+        delay = self.ntp_first_delay
+        while not self._stopping:
+            time.sleep(delay)
+            delay = 60
+            try:
+                self.refresh_ntp()
+            except Exception as exc:                       # the loop must survive anything
+                self._log(f"NTP refresh failed: {type(exc).__name__}: {exc}")
+
+    def ntp_status(self):
+        with self.lock:
+            return {name: dict(entry, due=entry["checked"] + self.ntp_refresh_seconds)
+                    for name, entry in self.ntp.items()}
+
     # ------------------------------------------------------- render / test
     def _render(self, name, data):
         if name == "dhcp4":
-            return cfg.render_dhcp4(data, self.lease_path(name))
+            return cfg.render_dhcp4(data, self.lease_path(name), self._ntp_addresses())
         return cfg.render_dhcp6(data, self.lease_path(name))
 
     def _stage_and_test(self, data):
@@ -349,6 +513,13 @@ class KeaManager:
                           "the app restarts. The Supervisor may be older than 2026.07 and "
                           "not know the 'app_config' map type; update Home Assistant.")
             self.settings = self.load_settings()
+            self._load_ntp()
+        # No network access here: DHCP must not wait for DNS. Saved addresses are used even when they are older than
+        # an hour; names never resolved yet are filled in by ntp_loop a few seconds after start.
+        with self.lock:
+            for gone in set(self.ntp) - set(cfg.ntp_hostnames(self.settings)):
+                del self.ntp[gone]
+            self._save_ntp()
             problems = self._stage_and_test(self.settings)
             if problems:
                 self.last_error = "\n".join(problems)
@@ -365,12 +536,19 @@ class KeaManager:
         cleaned, errors = cfg.validate(raw, self._global_of(self.settings))
         if errors:
             return {"ok": False, "errors": errors}
+        entries, _ = self._resolve_ntp(cleaned)            # network access: not under the lock
         with self.lock:
+            old_ntp = dict(self.ntp)
+            self.ntp.update(entries)
+            for gone in set(self.ntp) - set(cfg.ntp_hostnames(cleaned)):
+                del self.ntp[gone]
             problems = self._stage_and_test(cleaned)
             if problems:
+                self.ntp = old_ntp
                 return {"ok": False, "errors": problems}
             snapshot = self._snapshot()
             previous = self.settings
+            self._save_ntp()
             self._save_settings(cleaned)
             self._commit_staged(cleaned)
             self.settings = cleaned
@@ -379,11 +557,14 @@ class KeaManager:
             changes = self._activate(previous)
             failures = self._settle(mark)
             if failures:
+                self.ntp = old_ntp
+                self._save_ntp()
                 self._rollback(previous, snapshot)
                 return {"ok": False, "errors": failures + ["The previous configuration was restored."]}
             self.last_error = None
             action = "restarted" if changes["restarted"] or "dhcp4" in changes["started"] else "reloaded"
             return {"ok": True, "settings": cleaned, "action": action, "changes": changes,
+                    "warnings": self._ntp_warnings(cfg.ntp_hostnames(cleaned), entries),
                     "status": self.status()}
 
     def restart(self):
@@ -403,6 +584,27 @@ class KeaManager:
         """Validate/migrate an uploaded settings file without applying it."""
         cleaned, errors = cfg.validate(raw, self._global_of(self.settings))
         return {"ok": not errors, "errors": errors, "settings": cleaned if not errors else None}
+
+    def import_dhcp_server(self, text):
+        """Convert the options of the old DHCP server app (YAML or JSON text) into a draft; nothing is applied."""
+        if not isinstance(text, str) or not text.strip():
+            return {"ok": False, "errors": ["paste the options of the DHCP server app first"]}
+        try:
+            options = migrate.parse_text(text)
+        except ValueError as exc:
+            return {"ok": False, "errors": [str(exc)]}
+        current = self.settings or self._default_settings()
+        result = migrate.convert(options, default_interface=self._global_of(current)["interface"])
+        if result["settings"] is not None:
+            # Only IPv4 comes from the old app: keep whatever IPv6 setup exists.
+            result["settings"]["dhcp6"] = current["dhcp6"]
+            result["settings"]["global"]["enable_dhcp6"] = self._global_of(current)["enable_dhcp6"]
+        result["errors"] = [] if result["ok"] else [i["text"] for i in result["report"] if i["level"] == "error"]
+        return result
+
+    def host_addresses(self):
+        """Addresses of this machine on the DHCP interface (the app runs in the host network)."""
+        return {"interface": self.interface, **addresses_of(self.interface)}
 
     def delete_lease(self, family, address):
         """Remove a lease by appending a lifetime-0 row while the daemon is stopped."""

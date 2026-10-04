@@ -22,6 +22,9 @@ UI_TERMS = [
     "NTP servers (comma separated)", "Custom DHCP options", "Prefix delegation pools",
     "Prefix length", "Delegated length",
     "Network interface", "Enable DHCPv6 server",                                  # settings tab
+    "Answer clients that ask for an unknown address", "Allow several devices to share one IP",
+    "Maximum lease time (seconds, optional)", "Check NTP servers", "Use this machine",
+    "Refresh addresses now", "Import from the DHCP server app", "Convert and load",
     "Request failed", "Kea problem", "Persistent storage is not mounted",        # banners
 ]
 

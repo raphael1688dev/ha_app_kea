@@ -12,7 +12,7 @@ Do not assume it is public.
 | Path | What |
 |---|---|
 | `kea/` | The app itself: `config.yaml`, `Dockerfile`, `run.sh`, `requirements.txt` (runtime pins), `CHANGELOG.md`, `DOCS.md`, `translations/` |
-| `kea/app/` | Backend (`settings.py` validate + render Kea configs, `manager.py` daemons/reload/logs, `leases.py`, `server.py`) and `static/index.html` (the whole frontend) |
+| `kea/app/` | Backend (`settings.py` validate + render Kea configs, `manager.py` daemons/reload/logs/NTP refresh, `leases.py`, `server.py`, `ntpcheck.py` SNTP probe + name refresh, `migrate.py` old DHCP server app import) and `static/index.html` (the whole frontend) |
 | `tests/` | pytest. Fake Kea scripts for most tests; `test_real_kea.py` needs the real Kea |
 | `ci/`, `scripts/` | CI smoke test and approved Kea series; release tool, Supervisor-rule checker |
 | `.github/workflows/` | `ci.yml` (tests, image, real Kea, smoke test), `release.yml` (tag -> GitHub Release) |
@@ -77,6 +77,14 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   `X-Forwarded-For` for connections from 127.0.0.1, which would let any process on this host-network machine pass as the Supervisor.
 - The Web UI accepts only requests from the Supervisor (`172.30.32.2`); tests override it with `KEA_UI_ALLOWED`.
 - The sidebar entry is off by default (`ingress_panel` is a user option), so the guide says "Open Web UI".
+- Kea cannot resolve host names when it answers a client (DHCPv4 option 42 is addresses only), unlike ISC dhcpd, which
+  resolved per request with a one-hour cache. So NTP names stay in `settings.json`, `manager` resolves and SNTP-probes
+  them (`ntpcheck.refresh`, saved in `ntp-servers.json`, hourly in `ntp_loop`, 5 minutes after a failure) and renders
+  only the good addresses; Kea is reloaded only when that list changes. `startup()` must never wait for DNS.
+  pool.ntp.org answers 4 random A records with a 130 s TTL, hence the "keep addresses that still work" rule.
+- Kea needs `ip-reservations-unique: false` for several reservations on one IP, `authoritative` is off by default
+  (dhcpd's was on), and DHCPv6 NTP is option 56 with suboptions in the `v6-ntp-server-suboptions` space. These are
+  covered by `tests/test_real_kea.py` and the smoke test, which only CI can run.
 - Web UI text from the network (lease hostnames) is untrusted: build DOM with `textContent`, never `innerHTML`.
 
 ## Not verified yet

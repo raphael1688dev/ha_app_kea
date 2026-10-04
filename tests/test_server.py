@@ -20,6 +20,23 @@ class FakeManager:
 
     def startup(self): self.started = True
     def watch(self): pass
+    def ntp_loop(self): pass
+    def ntp_status(self): return {"pool.test": {"addresses": ["198.51.100.1"]}}
+
+    def check_ntp(self, servers, version=4):
+        self.checked = (servers, version)
+        return {"ok": isinstance(servers, list), "report": {}, "usable": [], "warning": ""}
+
+    def import_dhcp_server(self, text):
+        self.old_app_text = text
+        return {"ok": bool(text), "errors": [] if text else ["paste the options"], "settings": cfg.default_settings(),
+                "report": [], "counts": {}}
+
+    def host_addresses(self): return {"interface": "eth0", "ipv4": ["192.168.1.2"], "ipv6": []}
+
+    def refresh_ntp(self, force=False):
+        self.refreshed = force
+        return {"ok": True, "changed": False}
     def shutdown(self): self.stopped = True
     def lease_path(self, name): return str(self.tmp_path / f"{name}.csv")
     def status(self): return {"daemons": {}, "last_error": None}
@@ -170,6 +187,24 @@ def test_import_preview(client, manager):
     r = client.post("/api/import", json=bad)
     assert r.status_code == 400 and r.json()["errors"]
     assert manager.applied is None   # preview never applies
+
+
+def test_import_from_the_old_app_and_host_addresses(client, manager):
+    assert client.post("/api/import/dhcp-server", json={"text": "x: 1"}).status_code == 200
+    assert manager.old_app_text == "x: 1"
+    assert client.post("/api/import/dhcp-server", json={}).status_code == 400
+    assert client.get("/api/host-addresses").json()["ipv4"] == ["192.168.1.2"]
+    assert client.post("/api/import/dhcp-server", content="x", headers={"content-type": "text/plain"}).status_code == 415
+
+
+def test_ntp_endpoints(client, manager):
+    assert client.get("/api/ntp").json()["pool.test"]["addresses"] == ["198.51.100.1"]
+    r = client.post("/api/ntp/check", json={"servers": ["pool.test"], "version": 6})
+    assert r.status_code == 200 and manager.checked == (["pool.test"], 6)
+    assert client.post("/api/ntp/check", json={"servers": "pool.test"}).status_code == 400
+    assert client.post("/api/ntp/refresh", json={}).status_code == 200 and manager.refreshed is True
+    # state-changing calls need a JSON content type
+    assert client.post("/api/ntp/refresh", content="x", headers={"content-type": "text/plain"}).status_code == 415
 
 
 # ------------------------------------------------------------------- hardening

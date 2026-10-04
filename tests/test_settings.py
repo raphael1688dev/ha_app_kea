@@ -18,7 +18,8 @@ def test_defaults_are_valid():
     cleaned, errors = cfg.validate(cfg.default_settings())
     assert errors == []
     assert cleaned["dhcp4"]["subnets"][0]["id"] == 1
-    assert cleaned["global"] == {"interface": "eth0", "enable_dhcp6": False}
+    assert cleaned["global"] == {"interface": "eth0", "enable_dhcp6": False,
+                                 "authoritative": False, "allow_shared_ips": False}
 
 
 def test_not_a_dict():
@@ -30,7 +31,8 @@ def test_global_validation_and_fallback():
     data = cfg.default_settings()
     del data["global"]
     cleaned, errors = cfg.validate(data, cfg.default_global("br0", True))
-    assert errors == [] and cleaned["global"] == {"interface": "br0", "enable_dhcp6": True}
+    assert errors == [] and cleaned["global"] == {"interface": "br0", "enable_dhcp6": True,
+                                                  "authoritative": False, "allow_shared_ips": False}
 
     data["global"] = {"interface": "bad name!", "enable_dhcp6": "yes"}
     errors = cfg.validate(data)[1]
@@ -286,3 +288,198 @@ def test_malformed_sections_are_errors_not_crashes():
         assert cleaned is not None
         if bad.get("dhcp4") not in (None,) or bad.get("dhcp6") not in (None, []):
             assert any("invalid format" in e for e in errors), bad
+
+
+# ============================================================================
+# Features needed to move over from the old ISC dhcpd based "DHCP server" app
+# ============================================================================
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("written, expected", [
+    ("b0:a7:32:6:a5:18", "b0:a7:32:06:a5:18"),            # one digit per octet: valid for Kea and dhcpd
+    ("B0:A7:32:6:A5:18", "b0:a7:32:06:a5:18"),
+    ("0:1:2:3:4:5", "00:01:02:03:04:05"),
+    ("b0-a7-32-6-a5-18", "b0:a7:32:06:a5:18"),
+    ("00:1E:06:42:A2:17", "00:1e:06:42:a2:17"),
+    ("aabbccddeeff", "aa:bb:cc:dd:ee:ff"),
+    ("aabb.ccdd.eeff", "aa:bb:cc:dd:ee:ff"),
+    ("  AA:BB:CC:DD:EE:FF ", "aa:bb:cc:dd:ee:ff"),
+])
+def test_mac_spellings(written, expected):
+    assert cfg.normalize_mac(written) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:ff:00", "aa:bb:cc:dd:ee:fff", "gg:bb:cc:dd:ee:ff",
+                                 "aabbccddeef", "aabbccddeeff00", "a:b:c:d:e", None])
+def test_mac_rejects(bad):
+    assert cfg.normalize_mac(bad) is None
+
+
+def reservation(mac, ip, name=""):
+    return {"hw_address": mac, "ip_address": ip, "hostname": name}
+
+
+def test_shared_ips_are_refused_unless_switched_on():
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["reservations"] = [
+        reservation("aa:bb:cc:dd:ee:01", "192.168.1.50", "lan"), reservation("aa:bb:cc:dd:ee:02", "192.168.1.50", "wifi")]
+    errors = cfg.validate(data)[1]
+    assert errors and "192.168.1.50" in errors[0] and "share one IP" in errors[0]      # tells what to do
+
+    data["global"]["allow_shared_ips"] = True
+    cleaned, errors = cfg.validate(data)
+    assert errors == [] and len(cleaned["dhcp4"]["subnets"][0]["reservations"]) == 2
+
+
+def test_shared_ips_still_need_different_macs_and_do_not_apply_to_ipv6():
+    data = cfg.default_settings()
+    data["global"]["allow_shared_ips"] = True
+    data["dhcp4"]["subnets"][0]["reservations"] = [
+        reservation("aa:bb:cc:dd:ee:01", "192.168.1.50"), reservation("aa:bb:cc:dd:ee:01", "192.168.1.51")]
+    assert any("duplicated within the subnet" in e for e in cfg.validate(data)[1])         # same MAC twice
+
+    data = cfg.default_settings()
+    data["global"]["allow_shared_ips"] = True
+    data["dhcp6"]["subnets"][0]["reservations"] = [
+        {"duid": "00:01:00:01:aa", "ip_address": "fd00::1500", "hostname": ""},
+        {"duid": "00:01:00:01:bb", "ip_address": "fd00::1500", "hostname": ""}]
+    assert any("duplicated" in e for e in cfg.validate(data)[1])                          # IPv6 stays unique
+
+
+def test_shared_ips_render_the_kea_switch_only_when_enabled():
+    data = cfg.default_settings()
+    assert "ip-reservations-unique" not in cfg.render_dhcp4(data, "/x")["Dhcp4"]
+    data["global"]["allow_shared_ips"] = True
+    assert cfg.render_dhcp4(data, "/x")["Dhcp4"]["ip-reservations-unique"] is False
+
+
+def test_authoritative_is_rendered_for_dhcpv4_only_when_enabled():
+    data = cfg.default_settings()
+    assert "authoritative" not in cfg.render_dhcp4(data, "/x")["Dhcp4"]
+    data["global"]["authoritative"] = True
+    assert cfg.render_dhcp4(data, "/x")["Dhcp4"]["authoritative"] is True
+    assert "authoritative" not in cfg.render_dhcp6(data, "/x")["Dhcp6"]
+
+
+def test_global_switches_must_be_booleans():
+    data = cfg.default_settings()
+    data["global"].update(authoritative="yes", allow_shared_ips=1)
+    errors = cfg.validate(data)[1]
+    assert any("authoritative" in e for e in errors) and any("allow_shared_ips" in e for e in errors)
+
+
+@pytest.mark.parametrize("name", ["zhimi-fan-za5_mibtf763", "yeelink-light-lamp10_mibt098f", "FP2-8D9F",
+                                  "SLZB-06M-2c1165fffe691075-LAN", "DS-2CD2446G2-I20220521AAWRJ99822555", "a"])
+def test_real_world_device_names_are_accepted_for_reservations(name):
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["reservations"] = [reservation("aa:bb:cc:dd:ee:01", "192.168.1.50", name)]
+    assert cfg.validate(data)[1] == []
+
+
+@pytest.mark.parametrize("name", ["bad name", "name!", "-leading", "trailing-", "x" * 64, "a..b", "näme"])
+def test_bad_device_names_are_still_refused(name):
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["reservations"] = [reservation("aa:bb:cc:dd:ee:01", "192.168.1.50", name)]
+    assert any("hostname is invalid" in e for e in cfg.validate(data)[1])
+
+
+def test_domain_names_stay_strict_about_underscores():
+    assert cfg.validate(dict(cfg.default_settings(), **{}))[1] == []
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["domain_name"] = "my_domain.lan"
+    assert any("domain name is invalid" in e for e in cfg.validate(data)[1])
+
+
+def test_max_lease_time():
+    data = cfg.default_settings()
+    sub = data["dhcp4"]["subnets"][0]
+    assert "max-valid-lifetime" not in cfg.render_dhcp4(data, "/x")["Dhcp4"]["subnet4"][0]
+    sub["max_lease_time"] = 172800
+    assert cfg.validate(data)[1] == []
+    assert cfg.render_dhcp4(data, "/x")["Dhcp4"]["subnet4"][0]["max-valid-lifetime"] == 172800
+    for bad, fragment in ((59, "between"), (31536001, "between"), ("x", "between"), (3600, "smaller")):
+        sub["max_lease_time"] = bad
+        assert any(fragment in e for e in cfg.validate(data)[1]), bad
+    for blank in ("", None):
+        sub["max_lease_time"] = blank
+        cleaned, errors = cfg.validate(data)
+        assert errors == [] and cleaned["dhcp4"]["subnets"][0]["max_lease_time"] is None
+
+
+def test_dhcpv4_ntp_accepts_addresses_and_names_but_not_ipv6():
+    data = cfg.default_settings()
+    sub = data["dhcp4"]["subnets"][0]
+    sub["ntp_servers"] = "192.168.1.1, 0.Asia.pool.ntp.org."
+    cleaned, errors = cfg.validate(data)
+    assert errors == [] and cleaned["dhcp4"]["subnets"][0]["ntp_servers"] == ["192.168.1.1", "0.asia.pool.ntp.org"]
+    assert cfg.ntp_hostnames(cleaned) == ["0.asia.pool.ntp.org"]
+    for bad in ("2001:db8::1", "not a host!", "-x"):
+        sub["ntp_servers"] = bad
+        errors = cfg.validate(data)[1]
+        assert errors and "an IPv4 address or a host name" in errors[0]
+
+
+def test_dhcpv4_ntp_names_render_as_the_addresses_the_app_resolved():
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["ntp_servers"] = ["192.168.1.1", "pool.test", "gone.test", "192.168.1.1"]
+    options = cfg.render_dhcp4(data, "/x", {"pool.test": ["198.51.100.1", "192.168.1.1"]})["Dhcp4"]["subnet4"][0]["option-data"]
+    assert {"name": "ntp-servers", "data": "192.168.1.1, 198.51.100.1"} in options      # no duplicates, gone.test left out
+    # with nothing resolved yet, only the literal address is sent
+    bare = cfg.render_dhcp4(data, "/x")["Dhcp4"]["subnet4"][0]["option-data"]
+    assert {"name": "ntp-servers", "data": "192.168.1.1"} in bare
+
+
+def test_dhcpv6_ntp_accepts_addresses_multicast_and_names():
+    data = cfg.default_settings()
+    sub = data["dhcp6"]["subnets"][0]
+    sub["ntp_servers"] = "2001:DB8::77, ff05::101  pool.ntp.org."
+    cleaned, errors = cfg.validate(data)
+    assert errors == []
+    assert cleaned["dhcp6"]["subnets"][0]["ntp_servers"] == ["2001:db8::77", "ff05::101", "pool.ntp.org"]
+
+
+@pytest.mark.parametrize("bad", ["192.168.1.1", "not a host!", "-x", "2001:db8::zz"])
+def test_dhcpv6_ntp_rejects(bad):
+    data = cfg.default_settings()
+    data["dhcp6"]["subnets"][0]["ntp_servers"] = [bad]
+    assert any("NTP server is invalid" in e for e in cfg.validate(data)[1])
+
+
+def test_dhcpv6_ntp_renders_a_container_with_one_suboption_per_server():
+    """The shape Kea's own unit test (optionDataNtpServer) uses: the empty `ntp-server` option plus suboptions."""
+    data = cfg.default_settings()
+    data["dhcp6"]["subnets"][0]["ntp_servers"] = ["2001:db8::77", "ff05::101", "2.pool.ntp.org"]
+    options = cfg.render_dhcp6(data, "/x")["Dhcp6"]["subnet6"][0]["option-data"]
+    ntp = [o for o in options if o["name"].startswith("ntp-server")]
+    assert ntp == [
+        {"name": "ntp-server"},
+        {"name": "ntp-server-address", "space": "v6-ntp-server-suboptions", "data": "2001:db8::77"},
+        {"name": "ntp-server-multicast", "space": "v6-ntp-server-suboptions", "data": "ff05::101"},
+        {"name": "ntp-server-fqdn", "space": "v6-ntp-server-suboptions", "data": "2.pool.ntp.org"},
+    ]
+    data["dhcp6"]["subnets"][0]["ntp_servers"] = []
+    assert not [o for o in cfg.render_dhcp6(data, "/x")["Dhcp6"]["subnet6"][0]["option-data"]
+                if o["name"].startswith("ntp-server")]
+
+
+def test_too_many_ntp_servers():
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["ntp_servers"] = [f"10.0.0.{i}" for i in range(1, 20)]
+    assert any("at most" in e for e in cfg.validate(data)[1])
+
+
+def test_custom_option_cannot_shadow_the_dhcpv6_ntp_option():
+    data = cfg.default_settings()
+    data["dhcp6"]["subnets"][0]["custom_options"] = [{"name": "ntp-server", "data": "x"}]
+    assert any("own field" in e for e in cfg.validate(data)[1])
+
+
+def test_settings_saved_before_these_fields_existed_still_load():
+    old = cfg.default_settings()
+    del old["global"]["authoritative"], old["global"]["allow_shared_ips"]
+    del old["dhcp4"]["subnets"][0]["max_lease_time"], old["dhcp6"]["subnets"][0]["ntp_servers"]
+    cleaned, errors = cfg.validate(old)
+    assert errors == [] and cleaned["global"]["authoritative"] is False
+    assert cleaned["dhcp4"]["subnets"][0]["max_lease_time"] is None
+    assert cleaned["dhcp6"]["subnets"][0]["ntp_servers"] == []

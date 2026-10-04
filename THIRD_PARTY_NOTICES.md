@@ -43,9 +43,10 @@ Pinned in `kea/requirements.txt`; licenses as declared by each package.
 | opentelemetry-api | Apache-2.0 |
 | pydantic | MIT |
 | pydantic-core (installed by pydantic) | MIT |
+| PyYAML | MIT |
 | starlette | BSD-3-Clause |
 | typing-extensions | PSF-2.0 |
 | typing-inspection | MIT |
 | uvicorn | BSD-3-Clause |
 
-Development and test tooling (`requirements-dev.txt`: pytest, httpx, pyyaml) is not part of the app's image.
+Development and test tooling (`requirements-dev.txt`: pytest, httpx) is not part of the app's image.

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+- Coming from the "DHCP server" app (ISC dhcpd)? Settings tab > **Import from the DHCP server app** converts its
+  options (networks, devices, DNS, NTP, domain, lease times) into the editor and reports what could not be carried
+  over. See "Moving from the DHCP server app" in the guide.
+- NTP servers can be host names (IPv4). The app looks them up when you save and every hour, checks that each address
+  really answers as a time server, and sends only those; Kea is reloaded only when the list changes. New buttons:
+  **Check NTP servers**, **Use this machine**, **Refresh addresses now**.
+- DHCPv6 can send NTP servers too (addresses, multicast addresses or host names).
+- New settings: **Answer clients that ask for an unknown address**, **Allow several devices to share one IP**, and a
+  per-subnet **Maximum lease time**.
+- A MAC address may be written with one digit per part (`b0:a7:32:6:a5:18`), and reserved device names may contain
+  underscores.
+- New runtime dependency: PyYAML (reads the old app's options).
+
 ## 2.1.8
 - The project is released under the MIT License, with a list of the third-party software the app uses and
   their licenses (`THIRD_PARTY_NOTICES.md`), a security policy and issue forms.

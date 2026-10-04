@@ -123,15 +123,20 @@ def run():
     rich = copy.deepcopy(settings)
     sub = rich["dhcp4"]["subnets"][0]
     sub["pools"].append({"start": "192.168.1.10", "end": "192.168.1.20"})
-    sub.update(domain_name="home.lan", domain_search="home.lan, lan", ntp_servers="192.168.1.2",
-               lease_time=7200,
+    rich["global"].update(authoritative=True, allow_shared_ips=True)
+    sub.update(domain_name="home.lan", domain_search="home.lan, lan", ntp_servers="192.168.1.2, no-such-host.invalid",
+               lease_time=3600, max_lease_time=7200,
                custom_options=[{"name": "tftp-server-name", "data": "192.168.1.5"}],
                reservations=[{"hw_address": "aa:bb:cc:dd:ee:01", "ip_address": "192.168.1.50",
-                              "hostname": "nas"}])
+                              "hostname": "nas_1"},
+                             {"hw_address": "aa:bb:cc:dd:ee:02", "ip_address": "192.168.1.50",
+                              "hostname": "nas_1-wifi"}])
     pid, mark = daemon()["pid"], last_seq()
     result = apply_settings(rich)
     if result["action"] != "reloaded":
         raise Failure(f"expected action 'reloaded', got {result['action']!r}")
+    if not any("no-such-host.invalid" in w for w in result.get("warnings", [])):
+        raise Failure(f"a host name that cannot be resolved should be reported as a warning: {result.get('warnings')}")
     time.sleep(4)
     d = daemon()
     if not d["running"] or d["pid"] != pid:
@@ -211,7 +216,7 @@ def run():
     v6 = copy.deepcopy(rich)
     v6["global"]["enable_dhcp6"] = True
     v6["dhcp6"]["subnets"][0].update(
-        domain_search="home.lan",
+        domain_search="home.lan", ntp_servers="2001:db8::123, ff05::101, pool.example",
         pd_pools=[{"prefix": "2001:db8:1::", "prefix_len": 48, "delegated_len": 64}])
     apply_settings(v6)
     try:

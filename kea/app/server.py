@@ -34,6 +34,7 @@ def create_app(manager, allowed_ips):
     async def lifespan(_app):
         manager.startup()
         threading.Thread(target=manager.watch, daemon=True).start()
+        threading.Thread(target=manager.ntp_loop, daemon=True).start()
         yield
         log("termination signal received, stopping Kea and the Web UI...")
         manager.shutdown()
@@ -117,6 +118,29 @@ def create_app(manager, allowed_ips):
     @app.post("/api/import", dependencies=[Depends(require_json)])
     def import_settings(data: dict = Body(...)):
         result = manager.import_preview(data)
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.post("/api/import/dhcp-server", dependencies=[Depends(require_json)])
+    def import_dhcp_server(data: dict = Body(...)):
+        result = manager.import_dhcp_server(data.get("text"))
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.get("/api/host-addresses")
+    def host_addresses():
+        return manager.host_addresses()
+
+    @app.get("/api/ntp")
+    def ntp_state():
+        return manager.ntp_status()
+
+    @app.post("/api/ntp/check", dependencies=[Depends(require_json)])
+    def ntp_check(data: dict = Body(...)):
+        result = manager.check_ntp(data.get("servers"), data.get("version", 4))
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.post("/api/ntp/refresh", dependencies=[Depends(require_json)])
+    def ntp_refresh():
+        result = manager.refresh_ntp(force=True)
         return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
     return app
