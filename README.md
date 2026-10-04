@@ -83,9 +83,25 @@ Nothing is merged automatically. CI (including the real-Kea tests) must pass on 
   image PR moves Kea to a different `major.minor`, the CI *Kea series guard* fails: read the Kea release notes, check
   the generated configuration, then update `ci/kea-series`.
 - **Merging a runtime or base-image PR does not ship it.** Users only get an update when `version` in
-  `kea/config.yaml` is bumped (and `kea/CHANGELOG.md` has an entry for it).
+  `kea/config.yaml` is bumped (and `kea/CHANGELOG.md` has an entry for it). See *Releasing* below.
 - Renovate must be enabled for the repository once: install the [Renovate GitHub App](https://github.com/apps/renovate)
   and grant it access to this repository.
+
+### Releasing
+
+Home Assistant offers an update only when `version` in `kea/config.yaml` changes. `scripts/release.py` bumps it and
+writes the matching `kea/CHANGELOG.md` entry (CI requires an entry for the current version):
+
+```bash
+scripts/release.py patch -m "Fix the lease table"   # 2.1.3 -> 2.1.4 with a hand-written note
+scripts/release.py patch --from-git                 # notes = commits under kea/ since the last release
+scripts/release.py minor --from-git --dry-run       # preview only, nothing is written
+scripts/release.py 3.0.0 -m "..." --commit          # explicit version; also creates the "Release 3.0.0" commit
+```
+
+Notes can come from any mix of `-m` (repeatable), `--from-git` (e.g. Renovate's "Update dependency ..." commits) and a
+`## Unreleased` section at the top of the changelog, which the tool turns into the new version's entry. A release with
+no notes is refused. The tool never pushes: review the wording, run `pytest tests`, then commit and push.
 
 ### Continuous integration
 
