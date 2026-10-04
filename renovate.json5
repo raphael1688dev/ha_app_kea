@@ -1,0 +1,62 @@
+// Renovate configuration. Docs: https://docs.renovatebot.com/configuration-options/
+//
+// What is tracked (nothing is auto-merged; CI must pass on every PR):
+//   - GitHub Actions in .github/workflows           (github-actions manager)
+//   - Base image in kea/Dockerfile                  (dockerfile manager)
+//   - Python pins in kea/requirements.txt           (runtime, shipped to users)
+//   - Python pins in requirements-dev.txt           (tests / CI only)
+// NOT tracked by Renovate: Kea itself. It comes from the Alpine package repository, so it only
+// changes with the base image; the CI "Kea series guard" (ci/kea-series) and the weekly CI run
+// report any change.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",   // actions/foo@<sha> # vX: immutable, still updated by Renovate
+    "docker:pinDigests",                // base image by digest, so rebuilds of the floating tag arrive as PRs
+  ],
+  timezone: "Asia/Taipei",
+  schedule: ["before 8am on monday"],
+  labels: ["dependencies"],
+  prConcurrentLimit: 5,
+  dependencyDashboard: true,
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    labels: ["security"],
+    schedule: ["at any time"],
+  },
+  packageRules: [
+    {
+      description: "CI actions: one grouped PR",
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+    },
+    {
+      description: "Test / CI Python tooling: one grouped PR",
+      matchManagers: ["pip_requirements"],
+      matchFileNames: ["requirements-dev.txt"],
+      groupName: "Python dev dependencies",
+    },
+    {
+      description: "Runtime Python packages end up in the image users run",
+      matchManagers: ["pip_requirements"],
+      matchFileNames: ["kea/requirements.txt"],
+      groupName: "Python runtime dependencies",
+      labels: ["dependencies", "runtime"],
+      prBodyNotes: [
+        "**Release reminder:** this changes the add-on image. Users only receive it after `version` in `kea/config.yaml` is bumped and `kea/CHANGELOG.md` has an entry for that version.",
+        "If CI fails with a pip *dependency conflict*, a package was bumped beyond what its parent allows (for example starlette vs. fastapi). Bump the parent in the same PR.",
+      ],
+    },
+    {
+      description: "Home Assistant base image: only Alpine tags (3.x); digest rebuilds of the same tag are separate patch-level updates",
+      matchPackageNames: ["ghcr.io/home-assistant/base"],
+      allowedVersions: "/^3\\.\\d+$/",
+      labels: ["dependencies", "runtime", "base-image"],
+      prBodyNotes: [
+        "**Alpine upgrade?** A new Alpine release can change the Kea series (the CI step *Kea series guard* fails if it does). Read the Kea release notes, check the generated configuration, then update `ci/kea-series`.",
+        "**Release reminder:** this changes the add-on image. Bump `version` in `kea/config.yaml` and add a `kea/CHANGELOG.md` entry, otherwise users do not receive it.",
+      ],
+    },
+  ],
+}

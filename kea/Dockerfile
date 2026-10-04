@@ -8,11 +8,12 @@ RUN apk add --no-cache \
         py3-pip \
         python3
 
-# Web UI 相依套件裝在獨立 venv，避免與系統 Python 套件互相影響
+# Web UI 相依套件裝在獨立 venv，避免與系統 Python 套件互相影響。
+# 版本全部固定在 requirements.txt（由 Renovate 追蹤更新）。
+COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir \
-        fastapi==0.142.2 \
-        uvicorn==0.54.0
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 COPY app /app
 COPY run.sh /run.sh

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.3
+- Reproducible builds: every Python dependency of the Web UI, transitive ones included, is now pinned in
+  `requirements.txt` (previously only two packages were pinned). No functional change.
+
 ## 2.1.2
 - Fix: Kea 3.0 refused to start because lease files were outside its default directory
   (`invalid path specified: '/config/kea', supported path is '/var/lib/kea'`). The directory is now

@@ -59,3 +59,8 @@
 - **刪除租約**：依 Kea memfile 慣例（同位址以最後一列為準、`valid_lifetime=0` 代表已刪除）在 daemon 停止時追加一列；此語意依文件與記憶撰寫，未用真實 Kea 驗證。若 Kea 在 LFC 進行中被停止，檔案狀態亦未測。
 - Ingress 在 `host_network` 下的來源 IP 是否為 `172.30.32.2`（可用環境變數 `KEA_UI_ALLOWED` 調整；被擋時畫面會顯示 `forbidden (<ip>)`）。
 - 預設範例網段 `192.168.1.0/24` 會在首次啟動就生效。
+
+## 7. 依賴追蹤（Renovate）
+- 設定檔 `renovate.json5`；追蹤 GitHub Actions、Dockerfile base image、`kea/requirements.txt`（執行期，完整固定含間接依賴）、`requirements-dev.txt`。
+- 不追蹤 Kea：Kea 版本由 Alpine 套件庫決定，只會隨 base image 改變；由 CI 的 Kea series guard 與每週排程把關。
+- 已知缺口：合併依賴 PR 不會自動升 `config.yaml` 的 `version`，使用者要等版本號變動才會收到更新（PR 內文已加提醒）。

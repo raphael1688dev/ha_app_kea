@@ -65,6 +65,28 @@ pytest tests                              # fake Kea; tests that need the real K
 python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assistant Supervisor rules
 ```
 
+### Dependency updates (Renovate)
+
+`renovate.json5` makes [Renovate](https://docs.renovatebot.com/) open pull requests, weekly on Monday morning
+(Asia/Taipei; security fixes at any time), for:
+
+| What | Where | PR grouping |
+|---|---|---|
+| GitHub Actions (pinned by digest) | `.github/workflows/` | one "GitHub Actions" PR |
+| Home Assistant base image (Alpine tag + digest) | `kea/Dockerfile` | separate PR, labelled `base-image` |
+| Python runtime packages | `kea/requirements.txt` | one PR, labelled `runtime` |
+| Python test tooling | `requirements-dev.txt` | one PR |
+
+Nothing is merged automatically. CI (including the real-Kea tests) must pass on every PR.
+
+- **Kea itself is not tracked by Renovate.** It comes from Alpine, so it only changes with the base image. If a base
+  image PR moves Kea to a different `major.minor`, the CI *Kea series guard* fails: read the Kea release notes, check
+  the generated configuration, then update `ci/kea-series`.
+- **Merging a runtime or base-image PR does not ship it.** Users only get an update when `version` in
+  `kea/config.yaml` is bumped (and `kea/CHANGELOG.md` has an entry for it).
+- Renovate must be enabled for the repository once: install the [Renovate GitHub App](https://github.com/apps/renovate)
+  and grant it access to this repository.
+
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main`, on pull requests, and weekly (Monday):

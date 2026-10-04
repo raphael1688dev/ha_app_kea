@@ -1,0 +1,19 @@
+# Runtime dependencies of the Web UI (installed into /opt/venv by the Dockerfile).
+# Everything is pinned, transitive dependencies included, so image builds are reproducible.
+# Renovate keeps these current (see renovate.json5); CI builds the image and runs the tests.
+#
+# pydantic-core is deliberately NOT listed: pydantic pins it to one exact version, so pip always picks
+# the matching one. Pinning it here as well would let Renovate bump it alone and break the resolver.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+fastapi==0.142.2
+h11==0.16.0
+idna==3.20
+opentelemetry-api==1.45.0
+pydantic==2.13.5
+starlette==1.7.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.54.0

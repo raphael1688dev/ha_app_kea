@@ -106,3 +106,30 @@ def test_docs_and_changelog_present(config):
         assert os.path.isfile(os.path.join(ADDON, name)), name
     with open(os.path.join(ADDON, "CHANGELOG.md"), encoding="utf-8") as fh:
         assert f"## {config['version']}" in fh.read(), "CHANGELOG.md has no entry for the current version"
+
+
+def test_runtime_requirements_are_fully_pinned():
+    """Reproducible builds, and something for Renovate to track: every line is name==version."""
+    with open(os.path.join(ADDON, "requirements.txt"), encoding="utf-8") as fh:
+        lines = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
+    assert lines, "kea/requirements.txt is empty"
+    for line in lines:
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*==\d[\w.!+-]*", line), f"not an exact pin: {line!r}"
+    names = {l.split("==")[0].lower().replace("_", "-") for l in lines}
+    assert {"fastapi", "uvicorn"} <= names
+
+
+def test_dockerfile_installs_the_pinned_requirements():
+    with open(os.path.join(ADDON, "Dockerfile"), encoding="utf-8") as fh:
+        text = fh.read()
+    assert "COPY requirements.txt" in text and "pip install" in text and "-r /tmp/requirements.txt" in text
+    assert not re.search(r"pip install[^\n]*==", text), "pin packages in requirements.txt, not in the Dockerfile"
+
+
+def test_dev_requirements_are_pinned_and_reuse_the_runtime_set():
+    with open(os.path.join(ROOT, "requirements-dev.txt"), encoding="utf-8") as fh:
+        lines = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
+    assert "-r kea/requirements.txt" in lines
+    for line in lines:
+        if not line.startswith("-r"):
+            assert "==" in line, f"dev dependency is not pinned: {line}"
