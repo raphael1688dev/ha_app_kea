@@ -5,9 +5,10 @@
   their licenses (`THIRD_PARTY_NOTICES.md`), a security policy and issue forms.
 - Fix: the Leases tab and Delete lost leases about an hour after start. Kea tidies its lease file every hour and moves
   the old state to `.1`/`.2` files; those are now read too (in Kea's own load order).
-- Fix: Save & apply now watches Kea for a moment after applying. If Kea stops, or rejects a reload, the previous
-  configuration is restored and the problem is shown (for example an interface that does not exist). Before, the Web UI
-  reported success and the broken setting stayed saved.
+- Fix: Save & apply now watches Kea for a moment after applying. If Kea stops, or rejects a reload, even though its
+  configuration test passed, the previous configuration is restored and the problem is shown. Before, the Web UI reported
+  success and the broken setting stayed saved. (A configuration that fails Kea's own test, such as a network interface
+  that does not exist, was already refused before anything was changed.)
 - Fix: for IPv6 leases the identifier is the DUID (Reserve used the MAC address when Kea had recorded one), and delegated
   prefixes are shown with their length and cannot be reserved as addresses.
 - Fix: a damaged `settings.json` no longer crashes the app on start-up or on import; a section that cannot be read is

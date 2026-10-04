@@ -140,6 +140,8 @@ def run():
     reload_lines = [e["line"] for e in log_entries() if e["seq"] > mark and e["source"] == "dhcp4"]
     print(f"    still running as pid {pid}; Kea logged {len(reload_lines)} lines after the signal")
 
+    # Real Kea 3.0.3 already rejects this in `kea -t`, so this checks the refusal and that nothing changed; the
+    # watch-and-roll-back path for a config that passes `-t` but cannot run is covered by the unit tests (fake Kea).
     step("a configuration Kea cannot run is refused and the previous one restored")
     good_interface = status()["interface"]
     bad = copy.deepcopy(rich)

@@ -68,8 +68,9 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 - Kea rotates its lease file about every hour (LFC, `lfc-interval` 3600): the old state moves to `<file>.1`/`.2`/`.completed`
   and the main file only holds what changed since. Always read leases with `leases.lease_file_chain()` (Kea's own load
   order), never just the main file; a smoke test shorter than an hour cannot notice the difference.
-- `kea -t` accepts configs Kea then cannot run (for example an interface that does not exist) and a rejected SIGHUP reload
-  only shows in Kea's log. So `manager.apply` watches the daemons for a moment and rolls back (settings.json, generated
+- `kea -t` does not open sockets or databases, so it can accept a config that Kea then cannot run (a lease directory outside
+  its data dir passed `-t` and only failed at start), and a rejected SIGHUP reload only shows in Kea's log. (A non-existent
+  interface *is* already rejected by `-t`: seen in CI with Kea 3.0.3.) So `manager.apply` watches the daemons for a moment and rolls back (settings.json, generated
   configs, running daemons) if one stopped or logged a failure. A daemon younger than 2 s is restarted, not signalled
   (the default action of SIGHUP is to terminate it).
 - uvicorn must run with `proxy_headers=False` (`server.make_config`): by default it takes the client address from

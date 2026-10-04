@@ -20,7 +20,7 @@ DAEMONS = {
 PERSISTENT_MOUNT = "/config"   # where the `app_config` map is mounted in the container
 LOG_LIMIT = 3000
 # After applying settings we watch the daemons for a moment: Kea can accept a config file in `-t` and still
-# fail for real (for example an interface that does not exist), and a reload failure only shows up in its log.
+# fail for real (`-t` opens no sockets or databases), and a reload failure only shows up in its log.
 SETTLE_SECONDS = 1.5
 RELOAD_GRACE = 2.0       # a daemon younger than this may not have installed its SIGHUP handler yet
 FAIL_MARKERS = ("RECONFIGURATION_FAIL", "CONFIG_LOAD_FAIL", "INIT_FAIL")
