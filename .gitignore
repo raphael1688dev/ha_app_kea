@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .venv/
 CLAUDE.local.md
+# Personal notes that are not part of the project
+discuss-gemini.md
