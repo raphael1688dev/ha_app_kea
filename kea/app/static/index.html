@@ -60,6 +60,7 @@
   .scroll { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
   .span { grid-column: 1 / -1; }
+  .tag { margin-left: 6px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
   textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
              background: var(--input-bg); color: var(--fg); }
   td.good { color: var(--ok); } td.bad { color: var(--danger); } td.warnc { color: var(--warn); }
@@ -433,21 +434,37 @@ function leaseTable(fam, title, all, idLabel) {
   const head = (label, key) => h("th", { class: "sortable", onclick: () => {
     leaseView.dir = leaseView.key === key ? -leaseView.dir : 1; leaseView.key = key; renderLeaseTables(); } },
     label + (leaseView.key === key ? (leaseView.dir > 0 ? " ▲" : " ▼") : ""));
+  const selectable = rows.filter((l) => l.kind === "address" && !isReserved(fam, l));
+  const tickedCount = all.filter((l) => leaseTicked(fam, l)).length;
+  const setAll = (on) => { for (const l of selectable) leaseTicks[fam][l.address] = on; renderLeaseTables(); };
   return h("div", { class: "card" },
-    h("h3", {}, title + " (" + rows.length + (rows.length !== all.length ? " of " + all.length : "") + ")"),
+    h("div", { class: "row" },
+      h("h3", { class: "grow" }, title + " (" + rows.length + (rows.length !== all.length ? " of " + all.length : "") + ")"),
+      h("button", { class: "sm", onclick: () => setAll(true) }, "Select all"),
+      h("button", { class: "sm", onclick: () => setAll(false) }, "Select none"),
+      h("button", { class: "sm primary", onclick: () => reserveSelected(fam) }, "Reserve selected (" + tickedCount + ")")),
+    h("div", { class: "muted small" }, "Ticked devices become reservations in the editor, so they keep their current address. " +
+      "Devices with a private (random) MAC address are not ticked: that address can change when the device resets it, and then the reservation no longer matches."),
     h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
+      h("thead", {}, h("tr", {}, h("th", {}), head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
                        head("Subnet ID", "subnet_id"), head("Time left", "remaining"), h("th", {}))),
       h("tbody", {}, rows.length ? rows.map((l) => h("tr", {},
+        h("td", {}, l.kind === "address" && !isReserved(fam, l)
+          ? h("input", Object.assign({ type: "checkbox", style: "width:auto", "aria-label": "Select " + l.address,
+              onchange: (e) => { leaseTicks[fam][l.address] = e.target.checked; renderLeaseTables(); } },
+              leaseTicked(fam, l) ? { checked: true } : {}))
+          : null),
         h("td", { class: "mono" }, l.kind === "prefix" && l.prefix_len != null ? l.address + "/" + l.prefix_len : l.address),
-        h("td", { class: "mono" }, l.identifier),
+        h("td", { class: "mono" }, l.identifier, l.random_mac
+          ? h("span", { class: "tag", title: "Locally administered MAC address: probably a private (random) address that the device can change" }, "private") : null,
+          isReserved(fam, l) && l.kind === "address" ? h("span", { class: "tag", title: "Already has a reservation in the editor" }, "reserved") : null),
         h("td", {}, l.hostname || "—"), h("td", {}, l.subnet_id == null ? "—" : l.subnet_id),
         h("td", { class: "nowrap" }, fmtDuration(l.remaining)),
         h("td", { class: "nowrap" },
           h("button", Object.assign({ class: "sm", title: l.kind === "address" ? "Add a static reservation for this device" : "Delegated prefixes and temporary addresses cannot be reserved here",
             onclick: () => makeStatic(fam, l) }, l.kind === "address" ? {} : { disabled: true, "data-locked": "1" }), "Reserve"), " ",
           h("button", { class: "sm danger", onclick: () => deleteLease(fam, l) }, "Delete"))))
-        : h("tr", {}, h("td", { colspan: 6, class: "muted" }, q ? "No leases match the filter" : "No active leases"))))));
+        : h("tr", {}, h("td", { colspan: 7, class: "muted" }, q ? "No leases match the filter" : "No active leases"))))));
 }
 
 function renderLeaseTables() {
@@ -470,17 +487,55 @@ function renderLeases() {
   renderLeaseTables();
 }
 
-function makeStatic(fam, lease) {
+// Adds a reservation for *lease* to the editor. Returns null, or the reason it was not added.
+function addReservation(fam, lease) {
   const sub = state.draft[fam].subnets.find((s) => s.id === lease.subnet_id);
-  if (!sub) { toast("Subnet " + lease.subnet_id + " is not in the editor (was it deleted or not saved yet?)", "err"); return; }
+  if (!sub) return "its subnet (" + lease.subnet_id + ") is not in the editor";
   const key = fam === "dhcp4" ? "hw_address" : "duid";
-  if (sub.reservations.some((r) => r[key] === lease.identifier || r.ip_address === lease.address)) {
-    toast("This device or address already has a reservation", "err"); return;
-  }
-  sub.reservations.push({ [key]: lease.identifier, ip_address: lease.address, hostname: (lease.hostname || "").replace(/\.$/, "") });
+  if (sub.reservations.some((r) => r[key] === lease.identifier)) return "this device already has a reservation";
+  if (state.draft[fam].subnets.some((s) => s.reservations.some((r) => r.ip_address === lease.address)) &&
+      !(fam === "dhcp4" && state.draft.global.allow_shared_ips)) return "this address is already reserved for another device";
+  const name = lease.reserve_hostname != null ? lease.reserve_hostname : (lease.hostname || "").replace(/\.$/, "");
+  sub.reservations.push({ [key]: lease.identifier, ip_address: lease.address, hostname: name });
+  return null;
+}
+
+function isReserved(fam, lease) {
+  const key = fam === "dhcp4" ? "hw_address" : "duid";
+  const sharing = fam === "dhcp4" && state.draft.global.allow_shared_ips;
+  const subs = state.draft[fam].subnets;
+  return subs.some((s) => s.reservations.some((r) =>
+    (s.id === lease.subnet_id && r[key] === lease.identifier) || (!sharing && r.ip_address === lease.address)));
+}
+
+function makeStatic(fam, lease) {
+  const why = addReservation(fam, lease);
+  if (why) { toast("Not added: " + why, "err"); return; }
   markDirty();
   switchTab(fam);
   toast("Reservation added to the editor. Review it, then click Save & apply.");
+}
+
+// Rows are ticked by default, except private (random) MAC addresses and what is already reserved; the user's own
+// ticks are remembered per address.
+const leaseTicks = { dhcp4: {}, dhcp6: {} };
+function leaseTicked(fam, l) {
+  if (l.kind !== "address" || isReserved(fam, l)) return false;
+  return fam in leaseTicks && l.address in leaseTicks[fam] ? leaseTicks[fam][l.address] : !l.random_mac;
+}
+
+function reserveSelected(fam) {
+  const chosen = (state.leases[fam] || []).filter((l) => leaseTicked(fam, l));
+  if (!chosen.length) { toast("Nothing selected", "err"); return; }
+  let added = 0;
+  const skipped = [];
+  for (const l of chosen) {
+    const why = addReservation(fam, l);
+    if (why) skipped.push(l.address + " (" + (l.identifier || "?") + "): " + why); else added++;
+  }
+  if (added) { markDirty(); switchTab(fam); }
+  if (skipped.length) showErrors([added + " reservation(s) added; " + skipped.length + " skipped:"].concat(skipped), "warn");
+  else toast(added + " reservation(s) added to the editor. Review them, then click Save & apply.");
 }
 
 async function deleteLease(fam, lease) {

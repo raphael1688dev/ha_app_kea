@@ -123,7 +123,10 @@ names are sent as names for the client to look up; many systems ignore DHCPv6 ti
   **Discard changes** goes back to the saved settings.
 - **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
   into the editor as a reservation (review it, then Save & apply); delegated IPv6 prefixes are shown with their
-  length and cannot be reserved. **Delete** removes a lease; Kea is stopped for a
+  length and cannot be reserved. To keep the current address of many devices at once, tick them (**Select all**,
+  **Select none**) and click **Reserve selected**: devices that are already reserved, or whose subnet is not in the
+  editor, are skipped and listed. Devices with a private (random) MAC address are not ticked by default, because the
+  device can change that address and the reservation would then stop matching. **Delete** removes a lease; Kea is stopped for a
   moment while that happens, and the device just asks again when its lease runs out.
 - **Logs tab:** the live Kea and app log, filterable by daemon or text. The same output is in the app's
   normal log page.

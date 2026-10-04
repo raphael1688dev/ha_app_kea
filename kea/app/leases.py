@@ -15,6 +15,8 @@ import ipaddress
 import os
 import time
 
+import settings as cfg
+
 # DHCPv6 lease_type column: 0 = address (IA_NA), 1 = temporary address (IA_TA), 2 = delegated prefix (IA_PD)
 _V6_KINDS = {"0": "address", "1": "temporary", "2": "prefix"}
 
@@ -81,6 +83,8 @@ def read_leases(path, now=None):
             "prefix_len": _to_int(row.get("prefix_len")) if kind == "prefix" else None,
             "identifier": identifier.strip(),
             "hostname": (row.get("hostname") or "").strip(),
+            "reserve_hostname": reservable_hostname(row.get("hostname")),
+            "random_mac": None if is_v6 else is_random_mac(identifier.strip()),
             "subnet_id": _to_int(row.get("subnet_id")),
             "valid_lifetime": valid,
             "expire": expire,
@@ -88,6 +92,24 @@ def read_leases(path, now=None):
         })
     leases.sort(key=lambda lease: _sort_key(lease["address"]))
     return leases
+
+
+def is_random_mac(mac):
+    """True for a locally administered MAC address (bit 0x02 of the first octet).
+
+    Phones and laptops use such addresses as a per-network "private address" that the user can reset, so a
+    reservation made for it may stop matching. (Virtual machines and containers use them too.)
+    """
+    try:
+        return bool(int(str(mac).split(":")[0], 16) & 0x02)
+    except ValueError:
+        return False
+
+
+def reservable_hostname(name):
+    """The lease's hostname if it may be used as the name of a reservation, else ''. Lease names come from clients."""
+    name = (name or "").strip().rstrip(".")
+    return name if name and cfg._RESERVATION_HOSTNAME_RE.match(name) else ""
 
 
 def find_latest_row(path, address):

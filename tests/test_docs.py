@@ -25,6 +25,7 @@ UI_TERMS = [
     "Answer clients that ask for an unknown address", "Allow several devices to share one IP",
     "Maximum lease time (seconds, optional)", "Check NTP servers", "Use this machine",
     "Refresh addresses now", "Import from the DHCP server app", "Convert and load",
+    "Select all", "Select none", "Reserve selected",
     "Request failed", "Kea problem", "Persistent storage is not mounted",        # banners
 ]
 

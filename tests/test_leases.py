@@ -173,3 +173,21 @@ def test_deleted_row_is_not_csv_quoted(tmp_path):
     last = open(path).read().splitlines()[-1]
     assert last == f"192.168.1.101,aa:bb:cc:dd:ee:01,,0,{NOW},1,0,0,h,0,{context},0"
     assert '""' not in last and '"{' not in last                     # no quoting or doubled quotes
+
+
+def test_random_mac_and_reservable_hostname_flags(tmp_path):
+    main = tmp_path / "kea-leases4.csv"
+    main.write_text(HEADER4
+                    + f"192.168.1.10,aa:bb:cc:dd:ee:01,,86400,{NOW + 100},1,0,0,laptop_1.,0,\n"          # 0xaa: private
+                    + f"192.168.1.11,b4:bb:cc:dd:ee:02,,86400,{NOW + 100},1,0,0,bad name!,0,\n"          # 0xb4: global
+                    + f"192.168.1.12,02:42:ac:11:00:02,,86400,{NOW + 100},1,0,0,,0,\n")                   # docker style
+    by = {l["address"]: l for l in read_leases(str(main), now=NOW)}
+    assert (by["192.168.1.10"]["random_mac"], by["192.168.1.10"]["reserve_hostname"]) == (True, "laptop_1")
+    assert (by["192.168.1.11"]["random_mac"], by["192.168.1.11"]["reserve_hostname"]) == (False, "")
+    assert by["192.168.1.12"]["random_mac"] is True and by["192.168.1.12"]["reserve_hostname"] == ""
+
+
+def test_ipv6_leases_have_no_random_mac_flag(tmp_path):
+    path = write(tmp_path, HEADER6 + "fd00::1000,00:01:00:01,3600,%d,1,1800,0,1,0,0,0,h6,,0,,,\n" % (NOW + 60))
+    lease = read_leases(path, now=NOW)[0]
+    assert lease["random_mac"] is None and lease["reserve_hostname"] == "h6"

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Leases tab: tick several devices and click **Reserve selected** to turn their current addresses into reservations in
+  one go. Devices with a private (random) MAC address are not ticked by default. A lease's hostname that is not a valid
+  name is left out of the reservation (before, it could make saving fail).
+
 ## 2.2.0
 - Coming from the "DHCP server" app (ISC dhcpd)? Settings tab > **Import from the DHCP server app** converts its
   options (networks, devices, DNS, NTP, domain, lease times) into the editor and reports what could not be carried
