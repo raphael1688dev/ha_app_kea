@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.7
 - Wording: Home Assistant now calls add-ons "apps" (since 2026.2), so the Web UI, the documentation, the log
   messages and the repository name say "app". The documented install steps now use the current menu names
   (Settings > Apps > Install app > Repositories). Settings, data and behaviour are unchanged.
