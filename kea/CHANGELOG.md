@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.4
 - Removed the Traditional Chinese (`zh-Hant`) translation of the configuration options; the add-on is English only.
 
 ## 2.1.3
