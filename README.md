@@ -1,122 +1,133 @@
 # ISC Kea DHCP Add-on for Home Assistant
 
-ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) with a Home Assistant Ingress Web UI.
+[![CI](https://github.com/raphael1688dev/ha_app_kea/actions/workflows/ci.yml/badge.svg)](https://github.com/raphael1688dev/ha_app_kea/actions/workflows/ci.yml)
+
+ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) for Home Assistant, with a Web UI inside Home Assistant.
+
+> **Status: experimental.** Every change is tested in CI against the real Kea 3.0 (configuration, start-up, reload,
+> lease handling, amd64 and aarch64). It has not had wide use in real Home Assistant installations yet, so back up
+> your router's DHCP settings before switching over, and please report problems as issues.
 
 ## Installation
 
 1. In Home Assistant, go to Settings → Add-ons → Add-on Store → ⋮ menu (top right) → Repositories.
 2. Add `https://github.com/raphael1688dev/ha_app_kea`.
-3. Install **ISC Kea DHCP Server**, set the network interface, and start it.
-4. Open **Kea DHCP** in the sidebar and configure your subnets in the Web UI.
+3. Install **ISC Kea DHCP Server**, then continue with the quick start below.
 
-## Features (Web UI)
+<!-- guide:start -->
+## What it does
 
-| Tab | What you can do |
+Runs the [ISC Kea](https://www.isc.org/kea/) DHCP server inside Home Assistant. It hands out IPv4 addresses (and,
+if you turn it on, IPv6 addresses) to the devices on your network, and you manage it from a Web UI inside Home
+Assistant: subnets, address pools, DNS, fixed addresses for chosen devices, and a live view of who has
+which address. Use it instead of your router's built-in DHCP server.
+
+## Before you start
+
+- **Only one DHCP server per network.** When you switch this one on, switch off DHCP on your router (or give the
+  two servers separate address ranges). Two servers answering the same network cause confusing address clashes.
+- **Give the Home Assistant machine a fixed address**, not one it gets from DHCP: it is now the DHCP server itself.
+- The add-on uses the **host network** and needs a recent Home Assistant (Supervisor 2026.07 or newer).
+- Have these at hand: your network in CIDR form (for example `192.168.1.0/24`), your router's address (the
+  "gateway", for example `192.168.1.1`) and the name of the network interface of the Home Assistant machine on that
+  network (for example `eth0` or `enp3s0`).
+
+## Quick start
+
+1. **Add-on Configuration tab:** set `interface` to the network interface on your network and start the add-on.
+   (If you are unsure of the name, start with the default; the **Settings** tab of the Web UI lists the interfaces
+   it found, and you can change it there.)
+2. **Open the Web UI:** click *Open Web UI* on the add-on page. Turn on **Show in sidebar** there if you want a
+   permanent **Kea DHCP** entry in the sidebar.
+3. **IPv4 tab:** a sample subnet `192.168.1.0/24` is already there. Replace its values with your own network:
+   *Subnet (CIDR)*, the *Address pools* start and end (the range of addresses to hand out), *Default gateway*
+   (your router) and *DNS servers*.
+4. Click **Save & apply** in the bar at the bottom. If something is wrong, a list of problems is shown and
+   **nothing is changed**.
+5. **Turn off DHCP on your router.**
+6. Renew the address on a device (reconnect it, or reboot it). It shows up in the **Leases** tab.
+
+## Settings reference
+
+### Add-on Configuration tab
+
+| Option | Meaning |
 |---|---|
-| **IPv4 / IPv6** | Multiple subnets; multiple address pools per subnet; gateway, DNS, lease time; static reservations (MAC for IPv4, DUID for IPv6). Advanced options: domain name, search domains, NTP servers, custom DHCP options by name, DHCPv6 prefix delegation pools |
-| **Leases** | Active IPv4 / IPv6 leases with filtering and sorting; **Reserve** turns a lease into a static reservation; **Delete** removes a lease |
-| **Logs** | Live Kea and add-on log, filter by daemon or text |
-| **Settings** | Network interface, DHCPv6 on/off, settings export and import |
+| `interface` | Network interface to serve DHCP on, for example `eth0`. Initial default only. |
+| `enable_dhcp6` | Initial value of the DHCPv6 switch (default off). |
 
-The server status and a **Restart Kea** button are always visible at the top.
+After the first save in the Web UI these two are managed in the Web UI's **Settings** tab, and the values here are
+no longer used.
 
-## How settings are applied
+### IPv4 and IPv6 tabs: one card per subnet
 
-Web UI settings are stored in `/config/kea/settings.json`. When you click **Save & apply**:
-
-1. The input is validated.
-2. The generated Kea configuration is checked with `kea-dhcpX -t`.
-3. Only if both pass is the configuration written. Running daemons are told to reload it (`SIGHUP`), so
-   leases and service are not interrupted. Changing the network interface, enabling DHCPv6, or a daemon
-   that is not running causes a (re)start instead.
-
-If any step fails, the running configuration is left untouched and the errors are shown.
-
-**Import** loads a settings file into the editor (older single-pool files are upgraded automatically) and
-changes nothing until you click **Save & apply**.
-
-## Add-on Configuration tab
-
-`interface` and `enable_dhcp6` in the add-on Configuration tab are only the **initial defaults** used until
-the first save in the Web UI. After that, the Web UI's Settings tab is authoritative.
-
-> A sample `192.168.1.0/24` subnet is created on first start. **Change it to your own network** before
-> letting devices obtain addresses from this server.
-
-## Notes
-
-- The add-on uses `host_network`. Make sure no other DHCP server (for example your router) is handing out
-  addresses on the same network.
-- Lease files and `settings.json` are kept in `/config/kea/` in Home Assistant.
-- **Deleting a lease** briefly stops the Kea daemon while the lease file is edited. The client keeps its
-  address until the lease runs out and then asks again.
-- Kea output is also written to the add-on log in Home Assistant.
-- The Web UI only accepts connections from the Home Assistant Supervisor (Ingress). It is not exposed
-  anywhere else.
-
-## Development
-
-The Web UI backend is FastAPI (`kea/app/`). The frontend is a single `static/index.html` using plain
-JavaScript and relative URLs so it works behind Ingress.
-
-```bash
-pip install -r requirements-dev.txt
-pytest tests                              # fake Kea; tests that need the real Kea are skipped
-python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assistant Supervisor rules
-```
-
-### Dependency updates (Renovate)
-
-`renovate.json5` makes [Renovate](https://docs.renovatebot.com/) open pull requests, weekly on Monday morning
-(Asia/Taipei; security fixes at any time), for:
-
-| What | Where | PR grouping |
-|---|---|---|
-| GitHub Actions (pinned by digest) | `.github/workflows/` | one "GitHub Actions" PR |
-| Home Assistant base image (Alpine tag + digest) | `kea/Dockerfile` | separate PR, labelled `base-image` |
-| Python runtime packages | `kea/requirements.txt` | one PR, labelled `runtime` |
-| Python test tooling | `requirements-dev.txt` | one PR |
-
-Nothing is merged automatically. CI (including the real-Kea tests) must pass on every PR.
-
-- **Kea itself is not tracked by Renovate.** It comes from Alpine, so it only changes with the base image. If a base
-  image PR moves Kea to a different `major.minor`, the CI *Kea series guard* fails: read the Kea release notes, check
-  the generated configuration, then update `ci/kea-series`.
-- **Merging a runtime or base-image PR does not ship it.** Users only get an update when `version` in
-  `kea/config.yaml` is bumped (and `kea/CHANGELOG.md` has an entry for it). See *Releasing* below.
-- Renovate must be enabled for the repository once: install the [Renovate GitHub App](https://github.com/apps/renovate)
-  and grant it access to this repository.
-
-### Releasing
-
-Home Assistant offers an update only when `version` in `kea/config.yaml` changes. `scripts/release.py` bumps it and
-writes the matching `kea/CHANGELOG.md` entry (CI requires an entry for the current version):
-
-```bash
-scripts/release.py patch -m "Fix the lease table"   # 2.1.3 -> 2.1.4 with a hand-written note
-scripts/release.py patch --from-git                 # notes = commits under kea/ since the last release
-scripts/release.py minor --from-git --dry-run       # preview only, nothing is written
-scripts/release.py 3.0.0 -m "..." --commit          # explicit version; also creates the "Release 3.0.0" commit
-```
-
-Notes can come from any mix of `-m` (repeatable), `--from-git` (e.g. Renovate's "Update dependency ..." commits) and a
-`## Unreleased` section at the top of the changelog, which the tool turns into the new version's entry. A release with
-no notes is refused. The tool never pushes: review the wording, run `pytest tests`, then commit and push.
-
-### Continuous integration
-
-`.github/workflows/ci.yml` runs on every push to `main`, on pull requests, and weekly (Monday):
-
-| Job | What it checks |
+| Field | Meaning |
 |---|---|
-| Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the add-on packaging |
-| Supervisor rules | `kea/config.yaml` against the **current** Supervisor source: valid `privileged` capabilities, non-deprecated `map` types and `arch` |
-| Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs), and a smoke test of the running container (startup, SIGHUP reload, lease deletion, restart) |
-| Image (aarch64) | Builds under QEMU and runs the real-Kea config tests (not on pull requests) |
+| Subnet (CIDR) | The network, for example `192.168.1.0/24` or `fd00::/64`. Must be the network address (no host bits set). Subnets must not overlap. |
+| Default gateway | IPv4 only. Your router; must be inside the subnet. Optional. |
+| DNS servers (comma separated) | Addresses of the DNS servers clients should use. IPv4 addresses in the IPv4 tab, IPv6 in the IPv6 tab. |
+| Lease time (seconds) | How long a client may keep an address before it must renew: 60 to 31,536,000. Default 86,400 (one day). |
+| Address pools | The ranges handed out automatically, each with a start and an end address inside the subnet. You can have several; they must not overlap. A subnet with no pool only serves its reservations. |
+| Reservations | Fixed addresses for specific devices, see below. |
 
-The image job also guards the Kea version: Alpine decides which Kea is installed, and `ci/kea-series`
-holds the approved `major.minor`. If Alpine moves to a different series the job fails; review the change
-(Kea release notes, generated config) and then update that file. If the **weekly** run fails, an issue is
-opened automatically, because something upstream changed without a commit here.
+**Reservations.** Identify the device by its **MAC address** (IPv4; written with `:`, `-` or `.` as you like) or
+its **DUID** (IPv6, hexadecimal), give it a **Reserved IP** inside the subnet, and optionally a **Hostname**. An
+address can be reserved only once, and a MAC/DUID only once per subnet. The reserved address may lie inside or
+outside the pools.
 
-To reproduce the smoke test locally you need Docker; see the `image` job for the exact commands.
+**Advanced options** (fold-out at the bottom of each card):
+
+| Field | Meaning |
+|---|---|
+| Domain name | IPv4 only. The local domain handed to clients, for example `home.lan`. |
+| Search domains (comma separated) | Domains clients append when they look up short names. |
+| NTP servers (comma separated) | IPv4 only. Time servers for clients. |
+| Custom DHCP options | Any other option by its Kea name (for example `tftp-server-name` or `boot-file-name`) and its value. Kea checks the name and value when you apply. Options that have their own field above cannot be repeated here. |
+| Prefix delegation pools | IPv6 only. Prefixes handed to routers behind this one: *Prefix* (no host bits), *Prefix length* and *Delegated length* (not smaller than the prefix length). |
+
+### Settings tab
+
+- **Network interface** and **Enable DHCPv6 server**. Changing the interface restarts Kea.
+- **Export settings** downloads everything you configured as one file. **Import settings** loads such a file into
+  the editor so you can look it over; nothing changes until you click **Save & apply**.
+
+## Using the Web UI
+
+- **Status bar** (top): the interface, whether DHCPv4 and DHCPv6 are running, and a **Restart Kea** button.
+- **Save & apply** (appears when you have unsaved changes): checks your input, asks Kea to test the new
+  configuration, and only then applies it. Kea reloads without dropping service, except when the interface changes
+  or DHCPv6 is switched on or off, which restarts it. **Discard changes** goes back to the saved settings.
+- **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
+  into the editor as a reservation (review it, then Save & apply). **Delete** removes a lease; Kea is stopped for a
+  moment while that happens, and the device just asks again when its lease runs out.
+- **Logs tab:** the live Kea and add-on log, filterable by daemon or text. The same output is in the add-on's
+  normal log page.
+
+## IPv6 (DHCPv6)
+
+Turn it on in the **Settings** tab, then configure the subnet in the **IPv6** tab. The sample `fd00::/64` is a
+private example; use a prefix that is really on your network. The interface needs an IPv6 link-local address.
+Clients only ask for DHCPv6 addresses if your router advertises that ("managed" flag in its router advertisements),
+and some systems, Android in particular, generally rely on automatic (SLAAC) addresses and do not use DHCPv6 at all.
+
+## Troubleshooting
+
+| What you see | What to check |
+|---|---|
+| **Request failed** with a list of problems | Fix the listed problems. Nothing was changed. |
+| Red **Kea problem** banner | Kea stopped or rejected the configuration. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
+| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant / Supervisor to 2026.07 or newer, then restart the add-on. Until then your settings are lost on every restart. |
+| `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
+| Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows start-up and errors; individual DHCP packets are not logged. |
+| IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
+
+## Your data
+
+Settings (`settings.json`) and the lease files are stored in the add-on's own config folder
+(`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the add-on.
+<!-- guide:end -->
+
+## For developers
+
+Architecture notes, running the tests, CI, dependency updates and how to cut a release are in
+[docs/development.md](docs/development.md).

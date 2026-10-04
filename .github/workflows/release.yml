@@ -1,0 +1,93 @@
+name: Release
+
+# Pushing a tag vX.Y.Z publishes the GitHub Release for it. Create the tag with
+#   scripts/release.py patch --from-git --tag     (then: git push origin main vX.Y.Z)
+# Nothing is published unless the tag matches `version` in kea/config.yaml, the changelog has an
+# entry for it, the commit is on main, and CI passed for that commit.
+# To (re)create the release of an existing tag, run this workflow by hand with the tag name.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)create the release for, e.g. v2.1.5"
+        required: true
+
+permissions:
+  contents: write   # create the release
+  actions: read     # read the CI result of the tagged commit
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check tag, version and changelog; build the release notes
+        # Rejects anything but vX.Y.Z, a tag that differs from kea/config.yaml, or a missing changelog entry.
+        run: |
+          python3 scripts/release_notes.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/notes.md"
+          {
+            echo "### Release notes for ${TAG}"
+            echo
+            cat "$RUNNER_TEMP/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The tagged commit must be on main
+        id: commit
+        run: |
+          sha="$(git rev-list -n1 "refs/tags/${TAG}")"
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error title=Not on main::${TAG} (${sha}) is not on main; releases are only cut from main."
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: CI must have passed for that commit
+        # The tag is usually pushed together with main, so CI may still be running: wait for it.
+        run: |
+          sha="${{ steps.commit.outputs.sha }}"
+          deadline=$((SECONDS + 1500))
+          while :; do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$sha" --event push \
+                      --limit 20 --json status,conclusion)"
+            total="$(jq 'length' <<<"$runs")"
+            passed="$(jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' <<<"$runs")"
+            pending="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
+            echo "CI runs for ${sha:0:7}: total=${total} passed=${passed} pending=${pending}"
+            if [ "$passed" -gt 0 ]; then
+              break
+            elif [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              echo "::error title=CI failed::CI did not pass for ${sha}; fix it and re-run this workflow, or publish a new tag."
+              exit 1
+            elif [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=No CI result::No finished CI run for ${sha} after 25 minutes."
+              exit 1
+            fi
+            sleep 20
+          done
+
+      - name: Create or update the GitHub Release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+            echo "Updated the existing release ${TAG}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+            echo "Created release ${TAG}"
+          fi
+          echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >> "$GITHUB_STEP_SUMMARY"

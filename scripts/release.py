@@ -8,6 +8,9 @@ or a fix does NOT ship it until this has been run. Standard library only.
   scripts/release.py minor --from-git                bump 2.1.3 -> 2.2.0, notes from the commits since the last release
   scripts/release.py 3.0.0 --dry-run                 show what would change, write nothing
   scripts/release.py patch --from-git --commit       also create the "Release x.y.z" commit (never pushes)
+  scripts/release.py patch --from-git --tag          commit and create the annotated tag vX.Y.Z (never pushes)
+
+Pushing the tag (`git push origin main vX.Y.Z`) makes the "Release" GitHub Actions workflow publish the GitHub Release.
 
 Notes come from any mix of: the "## Unreleased" section at the top of kea/CHANGELOG.md, -m/--message
 (repeatable) and --from-git. A release with no notes at all is refused.
@@ -86,6 +89,12 @@ def render_changelog(changelog_text, version, notes):
     return f"{HEADER}\n{heading}\n{body}{stripped.lstrip(chr(10))}"
 
 
+def section_for(changelog_text, version):
+    """Body of the `## <version>` section (stripped), or None if there is no such section."""
+    match = re.search(rf"^## {re.escape(fmt(version))}[ \t]*\n(.*?)(?=^## |\Z)", changelog_text, re.M | re.S)
+    return match.group(1).strip() if match else None
+
+
 # ---------------------------------------------------------------------- git
 def git(root, *args):
     result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
@@ -118,6 +127,8 @@ def run(argv, root):
     parser.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
     parser.add_argument("--commit", action="store_true",
                         help='git commit the two files as "Release x.y.z" (never pushes)')
+    parser.add_argument("--tag", action="store_true",
+                        help="implies --commit, then creates the annotated tag vX.Y.Z (never pushes)")
     args = parser.parse_args(argv)
 
     config_path = os.path.join(root, "kea", "config.yaml")
@@ -141,6 +152,11 @@ def run(argv, root):
         raise ReleaseError("nothing to put in the changelog: add -m \"...\", use --from-git, "
                            "or write notes under \"## Unreleased\" in kea/CHANGELOG.md")
 
+    tag_name = f"v{fmt(new)}"
+    if args.tag and subprocess.run(["git", "-C", root, "rev-parse", "-q", "--verify", f"refs/tags/{tag_name}"],
+                                   capture_output=True).returncode == 0:
+        raise ReleaseError(f"the tag {tag_name} already exists")
+
     new_config = set_config_version(config_text, new)
     new_changelog = render_changelog(changelog_text, new, notes)
 
@@ -157,10 +173,13 @@ def run(argv, root):
             fh.write(text)
     print("updated kea/config.yaml and kea/CHANGELOG.md")
 
-    if args.commit:
+    if args.commit or args.tag:
         git(root, "add", "kea/config.yaml", "kea/CHANGELOG.md")
         git(root, "commit", "-m", f"Release {fmt(new)}")
         print(f'committed "Release {fmt(new)}" (not pushed)')
+        if args.tag:
+            git(root, "tag", "-a", tag_name, "-m", f"Release {fmt(new)}\n\n" + "\n".join(notes))
+            print(f"created tag {tag_name}; publish with: git push origin main {tag_name}")
     else:
         print("next: review the changelog wording, run the tests, then commit and push "
               "(Home Assistant offers the update once main has the new version).")

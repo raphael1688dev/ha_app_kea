@@ -1,35 +1,116 @@
 # ISC Kea DHCP Server
 
-ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) with a Web UI in the Home Assistant sidebar.
+<!-- guide:start -->
+## What it does
+
+Runs the [ISC Kea](https://www.isc.org/kea/) DHCP server inside Home Assistant. It hands out IPv4 addresses (and,
+if you turn it on, IPv6 addresses) to the devices on your network, and you manage it from a Web UI inside Home
+Assistant: subnets, address pools, DNS, fixed addresses for chosen devices, and a live view of who has
+which address. Use it instead of your router's built-in DHCP server.
 
 ## Before you start
 
-- The app uses the host network. **Turn off the DHCP server on your router** (or make sure it hands out a
-  different range) before enabling this one.
-- A sample `192.168.1.0/24` subnet is created on first start. Open **Kea DHCP** in the sidebar and change it
-  to your own network before devices start using it.
+- **Only one DHCP server per network.** When you switch this one on, switch off DHCP on your router (or give the
+  two servers separate address ranges). Two servers answering the same network cause confusing address clashes.
+- **Give the Home Assistant machine a fixed address**, not one it gets from DHCP: it is now the DHCP server itself.
+- The add-on uses the **host network** and needs a recent Home Assistant (Supervisor 2026.07 or newer).
+- Have these at hand: your network in CIDR form (for example `192.168.1.0/24`), your router's address (the
+  "gateway", for example `192.168.1.1`) and the name of the network interface of the Home Assistant machine on that
+  network (for example `eth0` or `enp3s0`).
 
-## Configuration tab
+## Quick start
+
+1. **Add-on Configuration tab:** set `interface` to the network interface on your network and start the add-on.
+   (If you are unsure of the name, start with the default; the **Settings** tab of the Web UI lists the interfaces
+   it found, and you can change it there.)
+2. **Open the Web UI:** click *Open Web UI* on the add-on page. Turn on **Show in sidebar** there if you want a
+   permanent **Kea DHCP** entry in the sidebar.
+3. **IPv4 tab:** a sample subnet `192.168.1.0/24` is already there. Replace its values with your own network:
+   *Subnet (CIDR)*, the *Address pools* start and end (the range of addresses to hand out), *Default gateway*
+   (your router) and *DNS servers*.
+4. Click **Save & apply** in the bar at the bottom. If something is wrong, a list of problems is shown and
+   **nothing is changed**.
+5. **Turn off DHCP on your router.**
+6. Renew the address on a device (reconnect it, or reboot it). It shows up in the **Leases** tab.
+
+## Settings reference
+
+### Add-on Configuration tab
 
 | Option | Meaning |
 |---|---|
-| `interface` | Network interface to serve DHCP on (e.g. `eth0`, `enp3s0`). Initial default only. |
-| `enable_dhcp6` | Initial value of the DHCPv6 switch. |
+| `interface` | Network interface to serve DHCP on, for example `eth0`. Initial default only. |
+| `enable_dhcp6` | Initial value of the DHCPv6 switch (default off). |
 
-After the first save in the Web UI, interface and DHCPv6 are managed in the Web UI's **Settings** tab.
+After the first save in the Web UI these two are managed in the Web UI's **Settings** tab, and the values here are
+no longer used.
 
-## Web UI
+### IPv4 and IPv6 tabs: one card per subnet
 
-- **IPv4 / IPv6** – subnets, pools, gateway, DNS, lease time, static reservations, domain name,
-  search domains, NTP servers, custom options, DHCPv6 prefix delegation.
-- **Leases** – active leases; reserve a lease as a static address, or delete it.
-- **Logs** – live Kea and app log.
-- **Settings** – interface, DHCPv6, export/import.
+| Field | Meaning |
+|---|---|
+| Subnet (CIDR) | The network, for example `192.168.1.0/24` or `fd00::/64`. Must be the network address (no host bits set). Subnets must not overlap. |
+| Default gateway | IPv4 only. Your router; must be inside the subnet. Optional. |
+| DNS servers (comma separated) | Addresses of the DNS servers clients should use. IPv4 addresses in the IPv4 tab, IPv6 in the IPv6 tab. |
+| Lease time (seconds) | How long a client may keep an address before it must renew: 60 to 31,536,000. Default 86,400 (one day). |
+| Address pools | The ranges handed out automatically, each with a start and an end address inside the subnet. You can have several; they must not overlap. A subnet with no pool only serves its reservations. |
+| Reservations | Fixed addresses for specific devices, see below. |
 
-**Save & apply** validates the input and tests the generated Kea configuration; only if it passes is it
-applied (Kea reloads without restarting where possible). Otherwise nothing changes.
+**Reservations.** Identify the device by its **MAC address** (IPv4; written with `:`, `-` or `.` as you like) or
+its **DUID** (IPv6, hexadecimal), give it a **Reserved IP** inside the subnet, and optionally a **Hostname**. An
+address can be reserved only once, and a MAC/DUID only once per subnet. The reserved address may lie inside or
+outside the pools.
 
-## Data
+**Advanced options** (fold-out at the bottom of each card):
 
-Settings (`settings.json`) and lease files are stored in the app's config directory
-(`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in app backups.
+| Field | Meaning |
+|---|---|
+| Domain name | IPv4 only. The local domain handed to clients, for example `home.lan`. |
+| Search domains (comma separated) | Domains clients append when they look up short names. |
+| NTP servers (comma separated) | IPv4 only. Time servers for clients. |
+| Custom DHCP options | Any other option by its Kea name (for example `tftp-server-name` or `boot-file-name`) and its value. Kea checks the name and value when you apply. Options that have their own field above cannot be repeated here. |
+| Prefix delegation pools | IPv6 only. Prefixes handed to routers behind this one: *Prefix* (no host bits), *Prefix length* and *Delegated length* (not smaller than the prefix length). |
+
+### Settings tab
+
+- **Network interface** and **Enable DHCPv6 server**. Changing the interface restarts Kea.
+- **Export settings** downloads everything you configured as one file. **Import settings** loads such a file into
+  the editor so you can look it over; nothing changes until you click **Save & apply**.
+
+## Using the Web UI
+
+- **Status bar** (top): the interface, whether DHCPv4 and DHCPv6 are running, and a **Restart Kea** button.
+- **Save & apply** (appears when you have unsaved changes): checks your input, asks Kea to test the new
+  configuration, and only then applies it. Kea reloads without dropping service, except when the interface changes
+  or DHCPv6 is switched on or off, which restarts it. **Discard changes** goes back to the saved settings.
+- **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
+  into the editor as a reservation (review it, then Save & apply). **Delete** removes a lease; Kea is stopped for a
+  moment while that happens, and the device just asks again when its lease runs out.
+- **Logs tab:** the live Kea and add-on log, filterable by daemon or text. The same output is in the add-on's
+  normal log page.
+
+## IPv6 (DHCPv6)
+
+Turn it on in the **Settings** tab, then configure the subnet in the **IPv6** tab. The sample `fd00::/64` is a
+private example; use a prefix that is really on your network. The interface needs an IPv6 link-local address.
+Clients only ask for DHCPv6 addresses if your router advertises that ("managed" flag in its router advertisements),
+and some systems, Android in particular, generally rely on automatic (SLAAC) addresses and do not use DHCPv6 at all.
+
+## Troubleshooting
+
+| What you see | What to check |
+|---|---|
+| **Request failed** with a list of problems | Fix the listed problems. Nothing was changed. |
+| Red **Kea problem** banner | Kea stopped or rejected the configuration. Open the **Logs** tab, fix the setting, then **Save & apply** or **Restart Kea**. |
+| Yellow banner starting **Persistent storage is not mounted** | Update Home Assistant / Supervisor to 2026.07 or newer, then restart the add-on. Until then your settings are lost on every restart. |
+| `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
+| Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows start-up and errors; individual DHCP packets are not logged. |
+| IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
+
+## Your data
+
+Settings (`settings.json`) and the lease files are stored in the add-on's own config folder
+(`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the add-on.
+<!-- guide:end -->
+
+Project page, issues and developer documentation: https://github.com/raphael1688dev/ha_app_kea

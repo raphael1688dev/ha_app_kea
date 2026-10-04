@@ -175,3 +175,27 @@ def test_from_git_with_nothing_new_says_so(repo):
     with pytest.raises(release.ReleaseError, match="no commits under kea/"):
         release.run(["patch", "--from-git"], str(repo))
     assert read(repo, "config.yaml") == CONFIG
+
+
+def test_tag_flag_commits_and_creates_an_annotated_tag(repo):
+    release.run(["minor", "-m", "Shiny", "--tag"], str(repo))
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True).stdout.strip()
+    assert git("log", "-1", "--format=%s") == "Release 1.3.0"
+    assert git("cat-file", "-t", "v1.3.0") == "tag"                      # annotated, not lightweight
+    assert git("rev-parse", "v1.3.0^{commit}") == git("rev-parse", "HEAD")
+    assert "Shiny" in git("tag", "-l", "-n5", "v1.3.0")
+    assert git("status", "--porcelain") == ""
+
+
+def test_tag_flag_refuses_an_existing_tag_before_changing_anything(repo):
+    subprocess.run(["git", "-C", str(repo), "tag", "v1.2.4"], check=True)
+    with pytest.raises(release.ReleaseError, match="already exists"):
+        release.run(["patch", "-m", "x", "--tag"], str(repo))
+    assert read(repo, "config.yaml") == CONFIG and read(repo, "CHANGELOG.md") == CHANGELOG
+
+
+def test_tag_flag_with_dry_run_changes_nothing(repo):
+    release.run(["patch", "-m", "x", "--tag", "--dry-run"], str(repo))
+    assert read(repo, "config.yaml") == CONFIG
+    tags = subprocess.run(["git", "-C", str(repo), "tag"], capture_output=True, text=True).stdout.strip()
+    assert tags == ""

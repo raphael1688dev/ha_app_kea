@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Documentation: a full user guide (quick start, every setting explained, using each tab, IPv6 notes, troubleshooting) in the add-on's Documentation tab and the README.
+
 ## 2.1.4
 - Removed the Traditional Chinese (`zh-Hant`) translation of the configuration options; the add-on is English only.
 
