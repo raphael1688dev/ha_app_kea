@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.0
 - Leases tab: tick several devices and click **Reserve selected** to turn their current addresses into reservations in
   one go. Devices with a private (random) MAC address are not ticked by default. A lease's hostname that is not a valid
   name is left out of the reservation (before, it could make saving fail).
