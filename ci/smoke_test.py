@@ -172,6 +172,7 @@ def agent_call(method, path, token=None, data=None, headers=None, port=8100):
 
 
 def agent_api_flow():
+    time.sleep(3)          # the previous step restarted Kea; the app restarts (not reloads) a daemon younger than 2 s
     code, body = call("PUT", "/api/agent/config", {"enabled": True, "port": 8100, "allowed_cidrs": "127.0.0.0/8"})
     if code != 200 or not body["server"]["running"]:
         raise Failure(f"the agent API did not start (HTTP {code}): {body}")
