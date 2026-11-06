@@ -3,9 +3,12 @@
 Home Assistant app that runs the ISC Kea DHCP server (DHCPv4 + optional DHCPv6) with a FastAPI Web UI shown
 through Home Assistant Ingress. Users install it from this repository; Home Assistant reads `main`.
 
-**The GitHub repository is private** (owner's choice, 2026-10-04). Home Assistant clones repositories anonymously,
-so it cannot add a private one: until it is made public, nobody can install from the README's steps.
-Do not assume it is public.
+**The GitHub repository is public** (the owner made it public on or before 2026-11-06 to install the app). Home Assistant clones
+repositories anonymously, so users can add it from the README's steps (there is a one-click *Add repository* button). Settings made
+at that point: secret scanning and push protection, private vulnerability reporting (`SECURITY.md` relies on it), fork pull
+requests from first-time contributors need approval, and two rulesets that block force pushes and deletion of `main` and of `v*`
+tags. CI is deliberately **not** a required check and pull requests are not required: the owner pushes straight to `main`
+and CI runs afterwards.
 
 ## Layout
 

@@ -5,12 +5,16 @@
 ISC Kea dual-stack DHCP server (DHCPv4 + optional DHCPv6) for Home Assistant, with a Web UI inside Home Assistant.
 
 > **Status: experimental.** Every push to `main` and every pull request is tested in CI with the real Kea 3.0 on
-> amd64: configuration, start-up, reload, refusing a configuration Kea cannot run, and lease-file handling. After a
-> merge the aarch64 image is built and its configuration and start-up are tested too. The app has **not been
-> installed in a real Home Assistant yet**, so back up your router's DHCP settings before switching over, and please
-> report problems as issues.
+> amd64: configuration, start-up, reload, refusing a configuration Kea cannot run, lease deletion through Kea's control
+> channel and the API. After a merge the aarch64 image is built and its configuration and start-up are tested too.
+> The author runs it as the DHCP server of their own Home Assistant (since November 2026), but it has had little testing
+> beyond that, so back up your router's DHCP settings before switching over, and please report problems as issues.
 
 ## Installation
+
+[![Add this repository to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fraphael1688dev%2Fha_app_kea)
+
+The button opens the *add repository* dialog of your Home Assistant with this repository filled in. Or do it by hand:
 
 1. In Home Assistant, go to **Settings → Apps** and select **Install app**.
 2. In the top-right corner open the ⋮ menu, select **Repositories**, enter
