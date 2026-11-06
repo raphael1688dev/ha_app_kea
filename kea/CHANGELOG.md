@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.1
 - Importing from the DHCP server app: an entry listed twice with the same MAC address and the same address is kept once
   and reported as a notice, not as an error.
 
