@@ -643,3 +643,104 @@ def test_a_name_never_resolved_is_filled_in_after_start_without_delaying_kea(mgr
     mgr.ntp_resolver = ntp_resolver({"pool.test": ["198.51.100.1"]})
     first = pid(mgr)
     assert mgr.refresh_ntp()["changed"] and ntp_option(mgr) == "198.51.100.1" and pid(mgr) == first
+
+
+# ------------------------------------------------------------------ default interface that does not exist
+def routed_machine(monkeypatch, names=("enp1s0", "wlan0"), route="enp1s0"):
+    import manager
+    monkeypatch.setattr(manager, "network_interfaces", lambda: (list(names), route))
+
+
+def new_manager(tmp_path, options=None):
+    m = KeaManager(options if options is not None else {"interface": "eth0"},
+                   str(tmp_path / "etc"), str(tmp_path / "data"))
+    m.settle_seconds, m.reload_grace = 0.4, 0
+    return m
+
+
+def test_a_missing_default_interface_becomes_the_default_route_one_and_nothing_is_served_yet(tmp_path, fake_kea, monkeypatch):
+    routed_machine(monkeypatch)
+    m = new_manager(tmp_path)
+    try:
+        assert m.default_global["interface"] == "enp1s0" and m.auto_interface == "enp1s0"
+        m.startup()
+        st = m.status()
+        assert st["interface"] == "enp1s0" and st["awaiting_setup"] and st["last_error"] is None
+        assert not st["daemons"]["dhcp4"]["running"]
+        assert "not started until you click Save & apply" in log_text(m)
+        refused = m.restart()
+        assert not refused["ok"] and "not been set up" in refused["errors"][0]
+        assert not m.status()["daemons"]["dhcp4"]["running"]
+        assert m.refresh_ntp(force=True) == {"ok": True, "changed": False}
+    finally:
+        m.shutdown()
+
+
+def test_the_first_save_starts_kea_and_is_remembered(tmp_path, fake_kea, monkeypatch):
+    routed_machine(monkeypatch)
+    m = new_manager(tmp_path)
+    m.startup()
+    try:
+        data = cfg.default_settings("enp1s0")
+        assert m.apply(data)["ok"]
+        assert m.status()["daemons"]["dhcp4"]["running"] and not m.status()["awaiting_setup"]
+        assert os.path.exists(m.settings_path)
+    finally:
+        m.shutdown()
+    again = new_manager(tmp_path)                       # restart of the app: settings exist now
+    again.startup()
+    try:
+        assert not again.status()["awaiting_setup"] and again.status()["daemons"]["dhcp4"]["running"]
+    finally:
+        again.shutdown()
+
+
+def test_a_first_save_that_fails_leaves_kea_off_and_still_waiting(tmp_path, fake_kea, monkeypatch):
+    routed_machine(monkeypatch)
+    m = new_manager(tmp_path)
+    m.startup()
+    orig = cfg.render_dhcp4
+    cfg.render_dhcp4 = lambda *a, **k: dict(orig(*a, **k), marker="DIE_ME")      # the daemon exits at start
+    try:
+        result = m.apply(cfg.default_settings("enp1s0"))
+        assert not result["ok"] and "restored" in result["errors"][-1]
+    finally:
+        cfg.render_dhcp4 = orig
+    try:
+        st = m.status()
+        assert st["awaiting_setup"] and not st["daemons"]["dhcp4"]["running"]
+        assert not os.path.exists(m.settings_path)
+    finally:
+        m.shutdown()
+
+
+@pytest.mark.parametrize("options, names, route, why", [
+    ({"interface": "enp9s9"}, ("enp1s0",), "enp1s0", "a name the user typed is never replaced"),
+    ({"interface": "eth0"}, ("eth0", "wlan0"), "wlan0", "eth0 exists"),
+    ({"interface": "eth0"}, ("enp1s0",), None, "no default route to choose from"),
+    ({"interface": "eth0"}, (), None, "interfaces cannot be listed (not Linux)"),
+])
+def test_the_interface_is_left_alone_when_there_is_no_good_reason_to_change_it(tmp_path, fake_kea, monkeypatch,
+                                                                                options, names, route, why):
+    routed_machine(monkeypatch, names, route)
+    m = new_manager(tmp_path, options)
+    assert m.auto_interface is None and m.default_global["interface"] == options["interface"], why
+    m.startup()
+    try:
+        assert not m.status()["awaiting_setup"] and m.status()["daemons"]["dhcp4"]["running"], why
+    finally:
+        m.shutdown()
+
+
+def test_saved_settings_with_a_missing_interface_are_not_changed(tmp_path, fake_kea, monkeypatch):
+    """Only a fresh install is helped. Someone who saved `eth0` earlier still gets Kea's own refusal."""
+    routed_machine(monkeypatch)
+    os.makedirs(tmp_path / "data")
+    with open(tmp_path / "data" / "settings.json", "w", encoding="utf-8") as fh:
+        json.dump(cfg.default_settings("eth0"), fh)
+    m = new_manager(tmp_path)
+    m.startup()
+    try:
+        assert not m.status()["awaiting_setup"] and m.status()["interface"] == "eth0"
+    finally:
+        m.shutdown()

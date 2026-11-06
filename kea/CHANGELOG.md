@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- First start on a machine without an `eth0` interface (for example `enp3s0`): the app no longer shows a red "Kea problem"
+  because the default `eth0` does not exist. It uses the interface of the default route and waits, with a notice, until you
+  click **Save & apply** for the first time; nothing is served before that. An interface name you typed yourself is never replaced.
+
 ## 2.3.1
 - Importing from the DHCP server app: an entry listed twice with the same MAC address and the same address is kept once
   and reported as a notice, not as an error.

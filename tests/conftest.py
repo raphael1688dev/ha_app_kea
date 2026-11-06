@@ -23,6 +23,13 @@ while true; do sleep 0.1; done
 """
 
 
+@pytest.fixture(autouse=True)
+def eth0_exists(monkeypatch):
+    """The machine running the tests (a CI runner, a laptop) must not decide whether `eth0` "exists"."""
+    import manager
+    monkeypatch.setattr(manager, "network_interfaces", lambda: (["eth0"], "eth0"))
+
+
 @pytest.fixture
 def fake_kea(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"

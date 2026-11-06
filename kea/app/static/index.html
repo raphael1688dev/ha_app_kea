@@ -56,6 +56,8 @@
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: var(--accent); }
   td input { min-width: 110px; }
+  td input[type="checkbox"] { min-width: 0; width: auto; margin: 0; }
+  th.sel, td.sel { width: 1%; padding-right: 0; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
   .scroll { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
@@ -230,6 +232,11 @@ function renderStatus() {
     kerr.append(h("div", { class: "banner warn" },
       "Persistent storage is not mounted at /config, so settings and leases will be lost when the app restarts. " +
       "Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the app."));
+  if (st.awaiting_setup)
+    kerr.append(h("div", { class: "banner warn" },
+      "Kea is not running yet. The interface option was left at its default, which this machine does not have, so " +
+      st.interface + " (the interface of the default route) is shown. Nothing is served until you check the settings " +
+      "(interface, subnet) and click Save & apply for the first time."));
   if (st.last_error)
     kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }
@@ -446,11 +453,11 @@ function leaseTable(fam, title, all, idLabel) {
     h("div", { class: "muted small" }, "Ticked devices become reservations in the editor, so they keep their current address. " +
       "Devices with a private (random) MAC address are not ticked: that address can change when the device resets it, and then the reservation no longer matches."),
     h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}), head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
+      h("thead", {}, h("tr", {}, h("th", { class: "sel" }), head("IP address", "address"), head(idLabel, "identifier"), head("Hostname", "hostname"),
                        head("Subnet ID", "subnet_id"), head("Time left", "remaining"), h("th", {}))),
       h("tbody", {}, rows.length ? rows.map((l) => h("tr", {},
-        h("td", {}, l.kind === "address" && !isReserved(fam, l)
-          ? h("input", Object.assign({ type: "checkbox", style: "width:auto", "aria-label": "Select " + l.address,
+        h("td", { class: "sel" }, l.kind === "address" && !isReserved(fam, l)
+          ? h("input", Object.assign({ type: "checkbox", "aria-label": "Select " + l.address,
               onchange: (e) => { leaseTicks[fam][l.address] = e.target.checked; renderLeaseTables(); } },
               leaseTicked(fam, l) ? { checked: true } : {}))
           : null),

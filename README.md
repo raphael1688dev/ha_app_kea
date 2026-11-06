@@ -40,7 +40,9 @@ which address. Use it instead of your router's built-in DHCP server.
 
 1. **Configuration tab:** set `interface` to the network interface on your network and start the app.
    (If you are unsure of the name, start with the default; the **Settings** tab of the Web UI lists the interfaces
-   it found, and you can change it there.)
+   it found, and you can change it there. If the default `eth0` does not exist on your machine, the app shows the
+   interface of the default route instead and does not start Kea until you click **Save & apply** for the first
+   time, so nothing is served before you have set up your network.)
 2. **Open the Web UI:** click *Open Web UI* on the app's page. Turn on **Show in sidebar** there if you want a
    permanent **Kea DHCP** entry in the sidebar.
 3. **IPv4 tab:** a sample subnet `192.168.1.0/24` is already there. Replace its values with your own network:

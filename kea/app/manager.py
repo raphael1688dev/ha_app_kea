@@ -27,12 +27,32 @@ LOG_LIMIT = 3000
 SETTLE_SECONDS = 1.5
 RELOAD_GRACE = 2.0       # a daemon younger than this may not have installed its SIGHUP handler yet
 FAIL_MARKERS = ("RECONFIGURATION_FAIL", "CONFIG_LOAD_FAIL", "INIT_FAIL")
+DEFAULT_INTERFACE = "eth0"   # the app option's default; a machine that has no such interface gets the default-route one
 LOG_SOURCES = ("addon", "dhcp4", "dhcp6")
 NTP_RETRY_SECONDS = 300  # a host name with no working address is tried again after this long
 
 
 def log(message):
     print(f"[kea-app] {message}", flush=True)
+
+
+def network_interfaces():
+    """``(names, default)``: the interfaces of this machine (without lo) and the one of the default route."""
+    names, default = [], None
+    try:
+        names = sorted(n for n in os.listdir("/sys/class/net") if n != "lo")
+    except OSError:
+        pass
+    try:
+        with open("/proc/net/route", encoding="utf-8") as fh:
+            for line in list(fh)[1:]:
+                parts = line.split()
+                if len(parts) > 2 and parts[1] == "00000000":
+                    default = parts[0]
+                    break
+    except OSError:
+        pass
+    return names, default
 
 
 def addresses_of(interface):
@@ -73,8 +93,18 @@ class KeaManager:
         self.data_dir = data_dir
         # The app options only seed the global settings; once settings.json
         # has a "global" section, the Web UI is the source of truth.
-        self.default_global = cfg.default_global(
-            str(options.get("interface") or "eth0"), bool(options.get("enable_dhcp6")))
+        interface = str(options.get("interface") or DEFAULT_INTERFACE)
+        # Nobody chose `eth0`, it is just the option's default, and many machines (enp3s0, ...) have no such interface.
+        # Use the interface of the default route then, and serve nothing until the first Save & apply: the sample
+        # subnet is not the user's network. A name the user typed is never replaced (a typo must not start a DHCP
+        # server on another interface).
+        self.auto_interface = None
+        if interface == DEFAULT_INTERFACE:
+            names, route = network_interfaces()
+            if names and interface not in names and route in names:
+                interface = self.auto_interface = route
+        self.default_global = cfg.default_global(interface, bool(options.get("enable_dhcp6")))
+        self.awaiting_setup = False         # set in startup(): auto-selected interface and nothing saved yet
         self.settings_path = os.path.join(data_dir, "settings.json")
         self.ntp_path = os.path.join(data_dir, "ntp-servers.json")
         self.ntp = {}                       # host name -> {"addresses", "checked", "error", "stale"}
@@ -250,7 +280,7 @@ class KeaManager:
         """Re-resolve the NTP names (due ones, or all with *force*) and reload Kea if the addresses changed."""
         with self.lock:
             data = self.settings
-        if data is None:
+        if data is None or self.awaiting_setup:
             return {"ok": True, "changed": False}
         entries, report = self._resolve_ntp(data, force)
         if not entries:
@@ -399,6 +429,8 @@ class KeaManager:
     def _restart_all(self):
         for name in DAEMONS:
             self._stop(name)
+        if self.awaiting_setup:
+            return
         for name in self.enabled:
             self._start(name)
 
@@ -410,7 +442,7 @@ class KeaManager:
         yet, and the default action of SIGHUP is to terminate) gets a real (re)start. Turning DHCPv6 on or off
         only starts or stops kea-dhcp6. Returns which daemons were reloaded / restarted / started / stopped.
         """
-        wanted = self.enabled
+        wanted = [] if self.awaiting_setup else self.enabled
         interface_changed = (previous is None
                              or self._global_of(previous)["interface"] != self.interface)
         changes = {"reloaded": [], "restarted": [], "started": [], "stopped": []}
@@ -514,12 +546,20 @@ class KeaManager:
                           "not know the 'app_config' map type; update Home Assistant.")
             self.settings = self.load_settings()
             self._load_ntp()
+            self.awaiting_setup = bool(self.auto_interface) and not os.path.exists(self.settings_path)
+            if self.awaiting_setup:
+                self._log(f"The interface option is the default (eth0) but this machine has no such interface. "
+                          f"Using {self.auto_interface}, the interface of the default route. Kea is not started "
+                          "until you click Save & apply in the Web UI for the first time.")
         # No network access here: DHCP must not wait for DNS. Saved addresses are used even when they are older than
         # an hour; names never resolved yet are filled in by ntp_loop a few seconds after start.
         with self.lock:
             for gone in set(self.ntp) - set(cfg.ntp_hostnames(self.settings)):
                 del self.ntp[gone]
             self._save_ntp()
+            if self.awaiting_setup:
+                self.last_error = None
+                return
             problems = self._stage_and_test(self.settings)
             if problems:
                 self.last_error = "\n".join(problems)
@@ -548,6 +588,7 @@ class KeaManager:
                 return {"ok": False, "errors": problems}
             snapshot = self._snapshot()
             previous = self.settings
+            was_awaiting, self.awaiting_setup = self.awaiting_setup, False   # this save is the first setup
             self._save_ntp()
             self._save_settings(cleaned)
             self._commit_staged(cleaned)
@@ -559,6 +600,7 @@ class KeaManager:
             if failures:
                 self.ntp = old_ntp
                 self._save_ntp()
+                self.awaiting_setup = was_awaiting
                 self._rollback(previous, snapshot)
                 return {"ok": False, "errors": failures + ["The previous configuration was restored."]}
             self.last_error = None
@@ -569,6 +611,9 @@ class KeaManager:
 
     def restart(self):
         with self.lock:
+            if self.awaiting_setup:
+                return {"ok": False, "errors": ["Kea has not been set up yet. Check the settings, then click "
+                                                "Save & apply; that starts Kea."]}
             if self.settings is None:
                 self.settings = self.load_settings()
             problems = self._stage_and_test(self.settings)
@@ -637,20 +682,7 @@ class KeaManager:
             return {"ok": True}
 
     def list_interfaces(self):
-        names, default = [], None
-        try:
-            names = sorted(n for n in os.listdir("/sys/class/net") if n != "lo")
-        except OSError:
-            pass
-        try:
-            with open("/proc/net/route", encoding="utf-8") as fh:
-                for line in list(fh)[1:]:
-                    parts = line.split()
-                    if len(parts) > 2 and parts[1] == "00000000":
-                        default = parts[0]
-                        break
-        except OSError:
-            pass
+        names, default = network_interfaces()
         return {"interfaces": names, "default": default}
 
     def storage_persistent(self):
@@ -682,6 +714,7 @@ class KeaManager:
                 "enable_dhcp6": "dhcp6" in enabled,
                 "daemons": daemons,
                 "last_error": self.last_error,
+                "awaiting_setup": self.awaiting_setup,
                 "storage_persistent": self.storage_persistent(),
             }
 
