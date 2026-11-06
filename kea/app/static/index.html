@@ -111,6 +111,8 @@ const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6
 const MAX_LOG_LINES = 1500;
 
 let state = { status: null, saved: null, draft: null, leases: null, interfaces: null, ntp: {} };
+let agentState = null;                            // /api/agent: API settings, tokens, proposals, saved versions
+let newSecret = null;                             // a token's secret, shown once right after it was created
 const ntpCheck = {};                              // last "Check NTP servers" result per subnet editor
 let importResult = null;                          // report of the last "Convert" of the old app's options
 let tab = "dhcp4";
@@ -624,6 +626,128 @@ function importReportView(res) {
   return h("div", {}, h("h4", {}, "Result"), tableOf(["", "What happened"], rows, "Nothing to report"));
 }
 
+// ------------------------------------------------------------- API access (agents and scripts)
+const SCOPE_HELP = {
+  read: "Look at settings, leases, logs",
+  propose: "Check a change and propose it (a person approves)",
+  apply: "Apply changes without approval",
+  "lease-delete": "Delete leases",
+  restart: "Restart Kea",
+};
+
+async function loadAgent() {
+  try { agentState = await api("agent"); } catch (e) { return; }
+  if (tab === "settings") { renderAgentConfig(); renderAgentPending(); }
+}
+
+async function loadAgentPending() {
+  try { agentState = await api("agent"); } catch (e) { return; }
+  renderAgentPending();                         // not the form above it: that would wipe what is being typed
+}
+
+function when(sec) { return sec ? new Date(sec * 1000).toLocaleString() : "never"; }
+
+function renderAgentConfig() {
+  const box = document.getElementById("agentbox");
+  if (!box || !agentState) return;
+  const cfgc = agentState.config, srv = agentState.server;
+  const form = { enabled: cfgc.enabled, port: String(cfgc.port), allowed_cidrs: cfgc.allowed_cidrs.join(", ") };
+  const tokenForm = { name: "", scopes: { propose: false, apply: false, "lease-delete": false, restart: false } };
+  const status = !cfgc.enabled ? "Off" : srv.running ? "Listening on port " + srv.port : "Not running" + (srv.error ? ": " + srv.error : "");
+  box.replaceChildren(h("div", { class: "card" },
+    h("h3", {}, "API access"),
+    h("p", { class: "muted" }, "An HTTP API for scripts and AI agents, separate from this page. It is off by default. A token can only read " +
+      "unless you give it more; changes are proposed and wait for your approval under Pending changes. It uses plain HTTP: keep it inside a trusted network."),
+    h("div", { class: "row" }, h("span", { class: "pill" }, h("span", { class: "dot " + (srv.running ? "up" : "") }), status)),
+    h("div", { class: "fields" },
+      h("div", {}, h("label", {}, "API"),
+        h("label", { class: "check" }, h("input", Object.assign({ type: "checkbox", onchange: (e) => { form.enabled = e.target.checked; } },
+          form.enabled ? { checked: true } : {})), "Enable the API")),
+      h("div", {}, h("label", {}, "Port"), textInput(form, "port", { inputmode: "numeric" })),
+      h("div", { class: "span" }, h("label", {}, "Networks allowed to connect (comma separated)"), textInput(form, "allowed_cidrs", { class: "mono" }))),
+    h("p", {}, h("button", { onclick: async () => {
+      showErrors(null);
+      try {
+        agentState = await sendJSON("PUT", "agent/config", { enabled: form.enabled, port: parseInt(form.port, 10),
+          allowed_cidrs: form.allowed_cidrs });
+        toast("API settings saved");
+        renderAgentConfig();
+      } catch (e) { showErrors(e.errors); }
+    } }, "Save API settings")),
+    h("h4", {}, "Tokens"),
+    tableOf(["Name", "Can", "Created", "Last used", ""], cfgc.tokens.map((t) => h("tr", {},
+      h("td", {}, t.name), h("td", {}, t.scopes.join(", ")), h("td", { class: "nowrap" }, when(t.created)),
+      h("td", { class: "nowrap" }, when(t.last_used)),
+      h("td", {}, h("button", { class: "danger sm", onclick: async () => {
+        if (!confirm("Delete the token " + t.name + "? Whatever uses it stops working.")) return;
+        try { await api("agent/tokens/" + t.id, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: "{}" }); loadAgent(); }
+        catch (e) { showErrors(e.errors); }
+      } }, "Delete")))), "No tokens yet"),
+    newSecret ? h("div", { class: "banner warn" }, "Token " + newSecret.name + " (shown only once, copy it now):",
+      h("div", { class: "mono", style: "margin:8px 0;user-select:all" }, newSecret.secret),
+      h("button", { class: "sm", onclick: () => { try { navigator.clipboard.writeText(newSecret.secret); toast("Copied"); } catch (e) { toast("Select the text and copy it", "err"); } } }, "Copy"),
+      " ", h("button", { class: "sm", onclick: () => { newSecret = null; renderAgentConfig(); } }, "I have saved it")) : null,
+    h("div", { class: "fields" },
+      h("div", {}, h("label", {}, "New token name"), textInput(tokenForm, "name", { placeholder: "home-agent" })),
+      h("div", {}, h("label", {}, "Allow"),
+        h("div", {}, h("label", { class: "check" }, h("input", { type: "checkbox", checked: true, disabled: true }), "read: " + SCOPE_HELP.read),
+          ...["propose", "apply", "lease-delete", "restart"].map((sc) => h("label", { class: "check", title: SCOPE_HELP[sc] },
+            h("input", { type: "checkbox", onchange: (e) => { tokenForm.scopes[sc] = e.target.checked; } }), sc + ": " + SCOPE_HELP[sc]))))),
+    h("p", {}, h("button", { onclick: async () => {
+      showErrors(null);
+      try {
+        const res = await sendJSON("POST", "agent/tokens", { name: tokenForm.name,
+          scopes: Object.keys(tokenForm.scopes).filter((k) => tokenForm.scopes[k]) });
+        newSecret = { name: res.token.name, secret: res.secret };
+        await loadAgent();
+      } catch (e) { showErrors(e.errors); }
+    } }, "Create token"))));
+}
+
+function renderAgentPending() {
+  const box = document.getElementById("agentpending");
+  if (!box || !agentState) return;
+  const pending = agentState.proposals.filter((p) => p.status === "pending");
+  const recent = agentState.proposals.filter((p) => p.status !== "pending").slice(0, 5);
+  const act = async (id, what, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return;
+    showErrors(null);
+    await setBusy(true);
+    try {
+      await sendJSON("POST", "agent/proposals/" + id + "/" + what);
+      toast(what === "approve" ? "Applied." : "Rejected.");
+      await loadAll();
+    } catch (e) { showErrors(e.errors); }
+    await setBusy(false);
+    await loadAgent(); renderStatus();
+  };
+  box.replaceChildren(h("div", { class: "card" },
+    h("h3", {}, "Pending changes (" + pending.length + ")"),
+    pending.length ? pending.map((p) => h("div", { class: "card", style: "margin:8px 0" },
+      h("div", {}, h("b", {}, p.token), " proposed, " + when(p.created) + (p.note ? ": " + p.note : "")),
+      h("ul", {}, p.changes.map((c) => h("li", {}, c))),
+      h("div", { class: "row" },
+        h("button", { class: "primary sm", onclick: () => act(p.id, "approve", "Apply this change now?\n\n" + p.changes.join("\n")) }, "Approve"),
+        h("button", { class: "sm", onclick: () => act(p.id, "reject") }, "Reject"),
+        p.base_revision !== agentState.revision ? h("span", { class: "muted small" }, "The settings changed after this was proposed; approving it will be refused.") : null)))
+      : h("div", { class: "muted" }, "Nothing is waiting for your decision."),
+    recent.length ? h("div", { class: "muted small" }, "Recently decided: " + recent.map((p) => p.status + " (" + p.token + ", " + when(p.decided) + ")").join("; ")) : null),
+    h("div", { class: "card" },
+      h("h3", {}, "Settings versions"),
+      h("p", { class: "muted" }, "Every applied change is saved first. Roll back to go to an earlier version."),
+      tableOf(["Time", "By", "Note", ""], agentState.history.map((v) => h("tr", {},
+        h("td", { class: "nowrap" }, when(v.time)), h("td", {}, v.source), h("td", {}, v.note || ""),
+        h("td", {}, v.revision === agentState.revision ? h("span", { class: "muted small" }, "current") :
+          h("button", { class: "sm", onclick: async () => {
+            if (!confirm("Replace the current settings with the version from " + when(v.time) + "?")) return;
+            showErrors(null);
+            await setBusy(true);
+            try { await sendJSON("POST", "history/" + v.revision + "/rollback"); toast("Rolled back."); await loadAll(); }
+            catch (e) { showErrors(e.errors); }
+            await setBusy(false); await loadAgent(); renderStatus();
+          } }, "Roll back")))), "No saved versions yet")));
+}
+
 async function onConvert() {
   const box = document.getElementById("oldapp");
   showErrors(null);
@@ -661,6 +785,7 @@ function renderSettings() {
           checkRow(g, "allow_shared_ips", "Allow several devices to share one IP",
             "For a device with a wired and a wireless interface: two MAC addresses, one reserved IP. Only one of them should be connected at a time."))),
       h("div", { class: "muted small" }, "Changing the interface restarts Kea. Turning DHCPv6 on or off only starts or stops the DHCPv6 service. Every other change is applied by reloading Kea, so running leases are not interrupted. The values in the app's Configuration tab are only the initial defaults.")),
+    h("div", { id: "agentbox" }), h("div", { id: "agentpending" }),
     h("div", { class: "card" },
       h("h3", {}, "Import from the DHCP server app"),
       h("p", { class: "muted" }, "Coming from the Home Assistant \"DHCP server\" app (ISC dhcpd)? Open that app's Configuration tab, switch to YAML, copy everything and paste it here. Your networks, devices, DNS, NTP and lease times are converted into the editor; nothing changes until you click Save & apply. Existing leases are not carried over."),
@@ -697,7 +822,7 @@ function renderView() {
   if (!state.draft) return;
   if (tab === "leases") renderLeases();
   else if (tab === "logs") renderLogs();
-  else if (tab === "settings") renderSettings();
+  else if (tab === "settings") { renderSettings(); renderAgentConfig(); renderAgentPending(); loadAgent(); }
   else renderFamily(tab);
 }
 
@@ -770,6 +895,7 @@ async function onRestart() {
   loadLeases();
   setInterval(() => { if (!document.hidden && !busy) refreshStatus(); }, 5000);
   setInterval(() => { if (!document.hidden && tab === "leases") loadLeases(); }, 10000);
+  setInterval(() => { if (!document.hidden && tab === "settings" && !busy) loadAgentPending(); }, 10000);
   setInterval(() => { if (!document.hidden && tab === "logs" && logView.auto) pollLogs(false); }, 2000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
 })();

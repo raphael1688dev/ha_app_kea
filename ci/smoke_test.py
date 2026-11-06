@@ -151,6 +151,85 @@ def control_lease_deletion():
     print(f"    deleted without a restart (pid {pid}); deleting it again is refused: {(body or {}).get('errors')}")
 
 
+def agent_call(method, path, token=None, data=None, headers=None, port=8100):
+    """A call to the agent API (its own port), as a script or an AI agent would make it."""
+    request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
+                                     data=json.dumps(data).encode() if data is not None else None)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    for name, value in (headers or {}).items():
+        request.add_header(name, value)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as resp:
+            return resp.status, json.loads(resp.read().decode() or "null")
+    except urllib.error.HTTPError as err:
+        try:
+            return err.code, json.loads(err.read().decode())
+        except ValueError:
+            return err.code, None
+
+
+def agent_api_flow():
+    code, body = call("PUT", "/api/agent/config", {"enabled": True, "port": 8100, "allowed_cidrs": "127.0.0.0/8"})
+    if code != 200 or not body["server"]["running"]:
+        raise Failure(f"the agent API did not start (HTTP {code}): {body}")
+    code, body = call("POST", "/api/agent/tokens", {"name": "smoke", "scopes": ["propose", "apply"]})
+    if code != 200:
+        raise Failure(f"creating a token failed (HTTP {code}): {body}")
+    token = body["secret"]
+    if agent_call("GET", "/v1/health")[0] != 401:
+        raise Failure("the agent API answered without a token")
+    code, body = agent_call("GET", "/v1/health", token)
+    if code != 200 or not body["data"]["daemons"]["dhcp4"]["running"]:
+        raise Failure(f"/v1/health failed (HTTP {code}): {body}")
+    first = body["data"]["revision"]
+    pid = daemon()["pid"]
+    add = [{"op": "add_reservation", "family": "dhcp4", "subnet_id": 1, "identifier": "aa:bb:cc:dd:ee:77",
+            "ip_address": "192.168.1.77", "hostname": "smoke-api"}]
+
+    code, body = agent_call("POST", "/v1/validate", token, {"operations": add})
+    if code != 200 or not body["data"]["ok"] or not body["data"]["changes"]:
+        raise Failure(f"the dry run (Kea's own test) failed (HTTP {code}): {body}")
+    print(f"    dry run ok: {body['data']['changes'][0]}")
+    if "smoke-api" in json.dumps(call("GET", "/api/state")[1]["settings"]):
+        raise Failure("the dry run changed the settings")
+
+    code, body = agent_call("POST", "/v1/proposals", token, {"operations": add, "note": "smoke test"})
+    if code != 201:
+        raise Failure(f"proposing failed (HTTP {code}): {body}")
+    proposal = body["data"]["id"]
+    if "smoke-api" in json.dumps(call("GET", "/api/state")[1]["settings"]):
+        raise Failure("a proposal was applied before a person approved it")
+    code, body = call("POST", f"/api/agent/proposals/{proposal}/approve")
+    if code != 200 or not body["ok"]:
+        raise Failure(f"approving the proposal failed (HTTP {code}): {body}")
+    if "smoke-api" not in json.dumps(call("GET", "/api/state")[1]["settings"]):
+        raise Failure("the approved proposal is not in the settings")
+    if daemon()["pid"] != pid or not daemon()["running"]:
+        raise Failure("approving a proposal restarted Kea; it should have been reloaded")
+    print("    proposal approved and applied by a reload (same Kea process)")
+
+    stale = agent_call("PUT", "/v1/settings", token, {"settings": call("GET", "/api/state")[1]["settings"]},
+                       {"If-Match": "000000000000"})
+    if stale[0] != 412:
+        raise Failure(f"a stale If-Match was not refused: {stale}")
+    code, body = agent_call("POST", "/v1/rollback", token, {"revision": first, "note": "smoke test"})
+    if code != 200:
+        raise Failure(f"rollback failed (HTTP {code}): {body}")
+    if "smoke-api" in json.dumps(call("GET", "/api/state")[1]["settings"]):
+        raise Failure("the rollback left the reservation in place")
+    print(f"    rolled back to revision {first}")
+
+    code, _ = call("PUT", "/api/agent/config", {"enabled": False, "port": 8100, "allowed_cidrs": "127.0.0.0/8"})
+    try:
+        agent_call("GET", "/v1/health", token)
+        raise Failure("the agent API still answers after it was switched off")
+    except urllib.error.URLError:
+        print("    switched off again: the port is closed")
+
+
 def run():
     step("waiting for Kea DHCPv4 to start")
     def started():
@@ -275,6 +354,9 @@ def run():
     if code != 200 or not body.get("ok"):
         raise Failure(f"restart failed (HTTP {code}): {body}")
     wait_for(lambda: daemon()["running"] and daemon()["pid"] != pid, "kea-dhcp4 restarted")
+
+    step("agent API: token, dry run, proposal approved by a person, rollback")
+    agent_api_flow()
 
     step("DHCPv6 (best effort: IPv6 support of CI runners and containers varies)")
     v6 = copy.deepcopy(rich)

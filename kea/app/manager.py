@@ -11,10 +11,14 @@ import subprocess
 import threading
 import time
 
+import apiauth
+import history as history_store
 import kea_control
 import leases as lease_files
 import migrate
 import ntpcheck
+import ops as setting_ops
+import proposals as proposal_store
 import settings as cfg
 
 DAEMONS = {
@@ -148,6 +152,12 @@ class KeaManager:
         self.control_api = (os.environ.get("KEA_APP_CONTROL") != "0"
                             and os.path.exists(os.path.join(os.environ.get("KEA_HOOKS_PATH") or HOOKS_DIR, LEASE_HOOK)))
         self.control_timeout = kea_control.DEFAULT_TIMEOUT
+        # saved versions of the settings, the API's tokens, pending proposals and the audit log (see docs/agent-api.md)
+        self.history = history_store.History(data_dir)
+        self.apiconfig = apiauth.ApiConfig(os.path.join(data_dir, "api.json"))
+        self.proposals = proposal_store.Proposals(os.path.join(data_dir, "proposals.json"))
+        self.audit = history_store.Audit(os.path.join(data_dir, "audit.jsonl"))
+        self.version = os.environ.get("BUILD_VERSION") or "unknown"
         self._control_problems = []
 
         self.env = dict(os.environ)
@@ -393,8 +403,9 @@ class KeaManager:
             return cfg.render_dhcp4(data, self.lease_path(name), self._ntp_addresses(), self._control_config(name))
         return cfg.render_dhcp6(data, self.lease_path(name), self._control_config(name))
 
-    def _stage_and_test(self, data):
-        """Write *.new files and run `kea -t`. Returns a list of problems."""
+    def _stage_and_test(self, data, keep=True):
+        """Write *.new files and run `kea -t`. Returns a list of problems. With ``keep=False`` the files are removed
+        again (a dry run)."""
         problems = []
         staged = []
         for name in self._enabled_for(data):
@@ -417,7 +428,7 @@ class KeaManager:
                 output = (result.stdout + result.stderr).strip().splitlines()
                 tail = "\n".join(output[-12:])
                 problems.append(f"{DAEMONS[name]['binary']} rejected the configuration:\n{tail}")
-        if problems:
+        if problems or not keep:
             for path in staged:
                 try:
                     os.remove(path)
@@ -599,6 +610,7 @@ class KeaManager:
                           "the app restarts. The Supervisor may be older than 2026.07 and "
                           "not know the 'app_config' map type; update Home Assistant.")
             self.settings = self.load_settings()
+            self.history.save(self.settings, "startup")            # a starting point to roll back to
             self._load_ntp()
             self.awaiting_setup = bool(self.auto_interface) and not os.path.exists(self.settings_path)
             if self.awaiting_setup:
@@ -626,12 +638,27 @@ class KeaManager:
             self._restart_all()
             self.last_error = None
 
-    def apply(self, raw):
+    def revision(self):
+        """The revision (short content hash) of the current settings, or None before they are loaded."""
+        return history_store.revision_of(self.settings) if self.settings is not None else None
+
+    def _stale(self, expected_revision):
+        return {"ok": False, "stale": True, "revision": self.revision(),
+                "errors": [f"the settings are at revision {self.revision()}, not {expected_revision}: "
+                           "read them again and redo the change"]}
+
+    def apply(self, raw, source="ui", note="", expected_revision=None):
+        """Validate, test with Kea and apply settings. *expected_revision* refuses the change when the settings were
+        changed by someone else since the caller read them. Every applied change is saved as a version first."""
         cleaned, errors = cfg.validate(raw, self._global_of(self.settings))
         if errors:
-            return {"ok": False, "errors": errors}
+            return {"ok": False, "errors": errors, "kind": "validation"}
+        if expected_revision is not None and expected_revision != self.revision():
+            return self._stale(expected_revision)
         entries, _ = self._resolve_ntp(cleaned)            # network access: not under the lock
         with self.lock:
+            if expected_revision is not None and expected_revision != self.revision():
+                return self._stale(expected_revision)
             old_ntp = dict(self.ntp)
             self.ntp.update(entries)
             for gone in set(self.ntp) - set(cfg.ntp_hostnames(cleaned)):
@@ -639,7 +666,7 @@ class KeaManager:
             problems = self._stage_and_test(cleaned)
             if problems:
                 self.ntp = old_ntp
-                return {"ok": False, "errors": problems}
+                return {"ok": False, "errors": problems, "kind": "kea"}
             snapshot = self._snapshot()
             previous = self.settings
             was_awaiting, self.awaiting_setup = self.awaiting_setup, False   # this save is the first setup
@@ -656,12 +683,124 @@ class KeaManager:
                 self._save_ntp()
                 self.awaiting_setup = was_awaiting
                 self._rollback(previous, snapshot)
-                return {"ok": False, "errors": failures + ["The previous configuration was restored."]}
+                return {"ok": False, "errors": failures + ["The previous configuration was restored."], "kind": "kea"}
             self.last_error = None
+            self.history.save(cleaned, source, note)
             action = "restarted" if changes["restarted"] or "dhcp4" in changes["started"] else "reloaded"
-            return {"ok": True, "settings": cleaned, "action": action, "changes": changes,
+            return {"ok": True, "settings": cleaned, "revision": self.revision(), "action": action, "changes": changes,
                     "warnings": self._ntp_warnings(cfg.ntp_hostnames(cleaned), entries),
                     "status": self.status()}
+
+    # ------------------------------------------------- agent API support
+    def _target(self, settings=None, operations=None):
+        """``(cleaned settings, errors)`` for a proposed change given as a whole document or as operations."""
+        if (settings is None) == (operations is None):
+            return None, ["give either 'settings' or 'operations', not both"]
+        current = self.settings
+        if operations is not None:
+            settings, errors = setting_ops.apply_operations(current, operations)
+            if errors:
+                return None, errors
+        cleaned, errors = cfg.validate(settings, self._global_of(current))
+        return (None if errors else cleaned), errors
+
+    def check_change(self, settings=None, operations=None):
+        """A dry run: validation and Kea's own test, nothing is applied. Returns what would change."""
+        with self.lock:
+            cleaned, errors = self._target(settings, operations)
+            base = self.revision()
+            if errors:
+                return {"ok": False, "errors": errors, "base_revision": base}
+            problems = self._stage_and_test(cleaned, keep=False)
+            return {"ok": not problems, "errors": problems, "base_revision": base,
+                    "new_revision": history_store.revision_of(cleaned), "unchanged": cleaned == self.settings,
+                    "changes": setting_ops.describe_changes(self.settings, cleaned), "settings": cleaned}
+
+    def apply_operations(self, operations, source="api", note="", expected_revision=None):
+        """Apply granular operations (see ops.py) to the current settings. Refused when the settings are not at
+        *expected_revision*."""
+        with self.lock:
+            revision = self.revision()
+            if expected_revision is not None and expected_revision != revision:
+                return self._stale(expected_revision)
+            cleaned, errors = self._target(operations=operations)
+        if errors:
+            return {"ok": False, "errors": errors, "kind": "validation"}
+        return self.apply(cleaned, source=source, note=note, expected_revision=revision)
+
+    def propose_change(self, token_name, note="", settings=None, operations=None):
+        checked = self.check_change(settings, operations)
+        if not checked["ok"]:
+            return checked
+        if checked["unchanged"]:
+            return dict(checked, ok=False, errors=["this change would not alter the settings"])
+        proposal = self.proposals.create(token_name, checked["settings"], checked["base_revision"],
+                                         checked["changes"], note)
+        return {"ok": True, "proposal": proposal}
+
+    def approve_proposal(self, proposal_id, approver="ui"):
+        """Apply a pending proposal (a person pressed Approve). It only applies to the settings it was made against."""
+        try:
+            p = self.proposals.get(proposal_id, with_settings=True)
+        except proposal_store.ProposalError as exc:
+            return {"ok": False, "errors": [str(exc)], "code": exc.code}
+        if p["status"] != proposal_store.PENDING:
+            return {"ok": False, "errors": [f"proposal {proposal_id} is already {p['status']}"], "code": "not_pending"}
+        result = self.apply(p["settings"], source=f"proposal {proposal_id} by {p['token']}, approved in the {approver}",
+                            note=p["note"], expected_revision=p["base_revision"])
+        if result.get("stale"):
+            try:
+                self.proposals.decide(proposal_id, proposal_store.REJECTED, "stale: the settings changed meanwhile")
+            except proposal_store.ProposalError:
+                pass
+            return dict(result, code="stale")
+        try:
+            if result["ok"]:
+                self.proposals.decide(proposal_id, proposal_store.APPLIED, f"applied as revision {result['revision']}",
+                                      current_revision=p["base_revision"])
+            else:
+                self.proposals.decide(proposal_id, proposal_store.FAILED, "; ".join(result["errors"])[:900])
+        except proposal_store.ProposalError:
+            pass
+        return result
+
+    def reject_proposal(self, proposal_id):
+        try:
+            return {"ok": True, "proposal": self.proposals.decide(proposal_id, proposal_store.REJECTED, "rejected in the Web UI")}
+        except proposal_store.ProposalError as exc:
+            return {"ok": False, "errors": [str(exc)], "code": exc.code}
+
+    def rollback(self, revision, source="rollback", note=""):
+        """Apply an older saved version of the settings."""
+        version = self.history.get(revision)
+        if version is None:
+            return {"ok": False, "errors": [f"no saved version {revision}"], "code": "not_found"}
+        return self.apply(version["settings"], source=source, note=note or f"rollback to {revision}")
+
+    def utilization(self):
+        """Per subnet: how many addresses the pools hold and how many leases / reservations there are."""
+        leases = self.get_leases()
+        out = []
+        for family in ("dhcp4", "dhcp6"):
+            if family == "dhcp6" and "dhcp6" not in self.enabled:
+                continue
+            addresses = [ipaddress.ip_address(l["address"]) for l in leases[family] if l.get("kind") == "address"]
+            for subnet in self.settings[family]["subnets"]:
+                pools = [(int(ipaddress.ip_address(p["start"])), int(ipaddress.ip_address(p["end"]))) for p in subnet["pools"]]
+                size = sum(b - a + 1 for a, b in pools)
+                mine = [l for l in leases[family] if l.get("subnet_id") == subnet["id"] and l.get("kind") == "address"]
+                in_pool = sum(1 for l in mine if any(a <= int(ipaddress.ip_address(l["address"])) <= b for a, b in pools))
+                out.append({"family": family, "id": subnet["id"], "subnet": subnet["subnet"], "pool_addresses": size,
+                            "leases": len(mine), "leases_in_pool": in_pool, "reservations": len(subnet["reservations"]),
+                            "percent_used": round(100 * in_pool / size, 1) if 0 < size < 2 ** 32 else None})
+        return out
+
+    def health(self):
+        st = self.status()
+        return {"version": self.version, "revision": self.revision(), "interface": st["interface"],
+                "awaiting_setup": st["awaiting_setup"], "control_api": st["control_api"],
+                "daemons": {n: {"enabled": d["enabled"], "running": d["running"]} for n, d in st["daemons"].items()},
+                "last_error": st["last_error"]}
 
     def restart(self):
         with self.lock:

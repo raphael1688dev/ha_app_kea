@@ -903,3 +903,142 @@ def test_a_channel_that_does_not_answer_falls_back_to_the_signal(controlled, goo
     assert controlled.apply(good)["ok"]
     text = log_text(controlled)
     assert "did not answer on its control socket" in text and "reloading kea-dhcp4 configuration (SIGHUP)" in text
+
+
+# ------------------------------------------------------------------ what the agent API builds on
+ADD_PRINTER = [{"op": "add_reservation", "family": "dhcp4", "subnet_id": 1, "identifier": "aa:bb:cc:dd:ee:20",
+                "ip_address": "192.168.1.60", "hostname": "printer"}]
+
+
+def reservations(m):
+    return [(r["hw_address"], r["ip_address"]) for r in m.settings["dhcp4"]["subnets"][0]["reservations"]]
+
+
+def test_startup_saves_the_first_version_and_every_apply_adds_one(mgr, good):
+    mgr.startup()
+    assert [v["source"] for v in mgr.history.list()] == ["startup"]
+    start = mgr.revision()
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    result = mgr.apply(good, source="api:agent", note="longer leases")
+    assert result["ok"] and result["revision"] == mgr.revision() != start
+    latest = mgr.history.list()[0]
+    assert (latest["source"], latest["note"], latest["revision"]) == ("api:agent", "longer leases", result["revision"])
+    assert mgr.history.get(start)["settings"]["dhcp4"]["subnets"][0]["lease_time"] == 86400
+
+
+def test_a_stale_revision_is_refused_and_nothing_changes(mgr, good):
+    mgr.startup()
+    seen = mgr.revision()
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert mgr.apply(good)["ok"]
+    again = cfg.default_settings()
+    again["dhcp4"]["subnets"][0]["lease_time"] = 9000
+    stale = mgr.apply(again, expected_revision=seen)
+    assert not stale["ok"] and stale["stale"] and mgr.settings["dhcp4"]["subnets"][0]["lease_time"] == 7200
+    assert mgr.apply(again, expected_revision=mgr.revision())["ok"]
+
+
+def test_a_dry_run_reports_the_change_and_leaves_no_trace(mgr):
+    mgr.startup()
+    before = (mgr.revision(), len(mgr.history.list()))
+    checked = mgr.check_change(operations=ADD_PRINTER)
+    assert checked["ok"] and not checked["unchanged"] and checked["base_revision"] == before[0]
+    assert any("reservation added: aa:bb:cc:dd:ee:20 -> 192.168.1.60 (printer)" in c for c in checked["changes"])
+    assert (mgr.revision(), len(mgr.history.list())) == before
+    assert not os.path.exists(mgr._conf_path("dhcp4", ".new")) and reservations(mgr) == []
+
+
+def test_a_dry_run_names_what_is_wrong(mgr):
+    mgr.startup()
+    assert not mgr.check_change(operations=[{"op": "delete_reservation", "family": "dhcp4", "identifier": "aa:bb:cc:dd:ee:99"}])["ok"]
+    bad_ip = [dict(ADD_PRINTER[0], ip_address="10.9.9.9")]
+    assert any("outside the subnet" in e for e in mgr.check_change(operations=bad_ip)["errors"])
+    both = mgr.check_change(settings=cfg.default_settings(), operations=ADD_PRINTER)
+    assert not both["ok"] and "either" in both["errors"][0]
+    assert mgr.check_change(settings=mgr.settings)["unchanged"]
+
+
+def test_kea_s_own_refusal_shows_in_a_dry_run(mgr):
+    mgr.startup()
+    orig = cfg.render_dhcp4
+    cfg.render_dhcp4 = lambda *a, **k: dict(orig(*a, **k), marker="FAIL_ME")
+    try:
+        checked = mgr.check_change(operations=ADD_PRINTER)
+    finally:
+        cfg.render_dhcp4 = orig
+    assert not checked["ok"] and "rejected the configuration" in checked["errors"][0]
+    assert not os.path.exists(mgr._conf_path("dhcp4", ".new"))
+
+
+def test_a_proposal_is_applied_only_when_approved(mgr):
+    mgr.startup()
+    made = mgr.propose_change("agent", "add the printer", operations=ADD_PRINTER)
+    assert made["ok"] and made["proposal"]["status"] == "pending"
+    assert reservations(mgr) == []                                  # nothing happens until a person approves
+    result = mgr.approve_proposal(made["proposal"]["id"])
+    assert result["ok"] and reservations(mgr) == [("aa:bb:cc:dd:ee:20", "192.168.1.60")]
+    done = mgr.proposals.get(made["proposal"]["id"])
+    assert done["status"] == "applied" and mgr.history.list()[0]["source"].startswith("proposal")
+    assert "agent" in mgr.history.list()[0]["source"]
+    assert not mgr.approve_proposal(made["proposal"]["id"])["ok"]   # not twice
+
+
+def test_a_proposal_goes_stale_when_the_settings_changed_meanwhile(mgr, good):
+    mgr.startup()
+    made = mgr.propose_change("agent", "add the printer", operations=ADD_PRINTER)
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert mgr.apply(good)["ok"]
+    result = mgr.approve_proposal(made["proposal"]["id"])
+    assert not result["ok"] and result["code"] == "stale" and reservations(mgr) == []
+    assert mgr.proposals.get(made["proposal"]["id"])["status"] == "rejected"
+
+
+def test_a_rejected_proposal_changes_nothing_and_a_pointless_one_is_not_stored(mgr):
+    mgr.startup()
+    made = mgr.propose_change("agent", "x", operations=ADD_PRINTER)
+    assert mgr.reject_proposal(made["proposal"]["id"])["ok"] and reservations(mgr) == []
+    assert mgr.proposals.get(made["proposal"]["id"])["status"] == "rejected"
+    assert not mgr.reject_proposal(made["proposal"]["id"])["ok"] and not mgr.reject_proposal("nope")["ok"]
+    same = mgr.propose_change("agent", "x", settings=mgr.settings)
+    assert not same["ok"] and "not alter" in same["errors"][0] and len(mgr.proposals.list()) == 1
+
+
+def test_a_failed_approval_is_recorded_and_restores_the_settings(mgr):
+    mgr.startup()
+    made = mgr.propose_change("agent", "x", operations=ADD_PRINTER)
+    orig = cfg.render_dhcp4
+    cfg.render_dhcp4 = lambda *a, **k: dict(orig(*a, **k), marker="FAIL_ME")
+    try:
+        result = mgr.approve_proposal(made["proposal"]["id"])
+    finally:
+        cfg.render_dhcp4 = orig
+    assert not result["ok"] and reservations(mgr) == []
+    assert mgr.proposals.get(made["proposal"]["id"])["status"] == "failed"
+
+
+def test_rollback_applies_an_older_version(mgr, good):
+    mgr.startup()
+    first = mgr.revision()
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert mgr.apply(good)["ok"]
+    result = mgr.rollback(first, source="api:agent")
+    assert result["ok"] and mgr.revision() == first and mgr.settings["dhcp4"]["subnets"][0]["lease_time"] == 86400
+    assert not mgr.rollback("deadbeef0000")["ok"] and mgr.rollback("deadbeef0000")["code"] == "not_found"
+
+
+def test_utilization_counts_pool_addresses_leases_and_reservations(mgr, good):
+    good["dhcp4"]["subnets"][0]["pools"] = [{"start": "192.168.1.100", "end": "192.168.1.109"}]
+    good["dhcp4"]["subnets"][0]["reservations"] = [{"hw_address": "aa:bb:cc:dd:ee:01", "ip_address": "192.168.1.50", "hostname": ""}]
+    write_leases(mgr, ("192.168.1.101", "a"), ("192.168.1.102", "b"), ("192.168.1.50", "reserved-one"))
+    mgr.startup()
+    assert mgr.apply(good)["ok"]
+    (row,) = mgr.utilization()
+    assert (row["family"], row["id"], row["pool_addresses"], row["leases"], row["leases_in_pool"], row["reservations"]) == (
+        "dhcp4", 1, 10, 3, 2, 1) and row["percent_used"] == 20.0
+
+
+def test_health_summary(mgr):
+    mgr.startup()
+    h = mgr.health()
+    assert h["revision"] == mgr.revision() and h["daemons"]["dhcp4"]["running"] and h["version"]
+    assert set(h) >= {"interface", "awaiting_setup", "control_api", "last_error"}

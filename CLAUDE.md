@@ -90,11 +90,19 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   config names them by file name only (`kea4-ctrl.sock`, `libdhcp_lease_cmds.so`). It is on only when that hook file exists, so
   unit tests (fake Kea) and development machines use the file/SIGHUP fallbacks. Real behaviour (lease4-add/get-all/del, config-reload,
   result 3 = nothing matched) is checked by `tests/test_real_kea.py` and the smoke test in CI only.
+- The agent API (`agent_api.py`, design in `docs/agent-api.md`) runs as a second uvicorn server on its own port, only when switched on;
+  tokens/scopes in `apiauth.py` (`api.json`, hashes only), saved settings versions and the audit log in `history.py`, proposals in
+  `proposals.py`, small named operations in `ops.py`. A *revision* is a content hash of the settings. Agents get read by default;
+  changes are proposed and a person approves them in the Web UI; interface, DHCPv6 switch, subnets and import are deliberately not
+  available as operations. Lease hostnames and log lines are marked untrusted (prompt-injection risk) and stripped of control characters.
 - Web UI text from the network (lease hostnames) is untrusted: build DOM with `textContent`, never `innerHTML`.
 
 ## Not verified yet
 
-The app has never been installed in a real Home Assistant: the Supervisor loading it, the Ingress panel, the
-`app_config` mount and real DHCP clients are only covered by static checks and CI. Deleting a lease appends a
-`valid_lifetime=0` row that Kea accepts, but that Kea treats the lease as deleted is not proven.
+The owner installed the app in their real Home Assistant on 2026-11-06 and was starting to migrate from the old DHCP server
+app; how that went is not known. Until it is, the Supervisor loading it, the Ingress panel, the `app_config` mount and real
+DHCP clients are only covered by static checks and CI. Deleting a lease through the control channel (`lease4-del`) is proven
+with the real Kea 3.0.3 in CI; only the fallback of appending a `valid_lifetime=0` row to the lease file is unproven (Kea accepts
+the row, but nothing shows that it then treats the lease as deleted). IPv6 lease deletion (`lease6-del`, IA_NA then IA_PD) has only
+been tested against a fake socket.
 See `docs/webui-design-notes.md` section 6.

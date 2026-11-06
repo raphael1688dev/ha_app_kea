@@ -26,6 +26,8 @@ UI_TERMS = [
     "Maximum lease time (seconds, optional)", "Check NTP servers", "Use this machine",
     "Refresh addresses now", "Import from the DHCP server app", "Convert and load",
     "Select all", "Select none", "Reserve selected",
+    "API access", "Enable the API", "Save API settings", "Create token", "Pending changes", "Approve", "Reject",
+    "Settings versions", "Roll back",
     "Request failed", "Kea problem", "Persistent storage is not mounted",        # banners
 ]
 

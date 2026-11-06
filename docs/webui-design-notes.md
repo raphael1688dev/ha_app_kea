@@ -74,9 +74,11 @@
 - **Ingress source IP** under `host_network`: whether it really is `172.30.32.2` is still an assumption. It can be
   changed with the `KEA_UI_ALLOWED` environment variable; when a request is blocked the page shows
   `forbidden (<ip>)`.
-- **Deleting a lease**: done by appending a row with `valid_lifetime=0` while the daemon is stopped (Kea's memfile
-  convention: the last row per address wins, and lifetime 0 means deleted). CI proves that Kea accepts the row and
-  starts normally afterwards, but not that Kea then treats the lease as deleted; that needs a full DHCP client
+- **Deleting a lease**: normally `lease4-del` / `lease6-del` through the control channel; the smoke test proves with the real
+  Kea 3.0.3 that the lease is gone afterwards and that Kea was not restarted (IPv6 deletion is only tested against a fake
+  socket). The *fallback* (used when the channel does not answer) appends a row with `valid_lifetime=0` while the daemon is
+  stopped (Kea's memfile convention: the last row per address wins, and lifetime 0 means deleted). CI proves that Kea accepts
+  that row and starts normally afterwards, but not that Kea then treats the lease as deleted; that needs a full DHCP client
   exercise. The file state when Kea is stopped in the middle of lease file cleanup (LFC) has not been tested either.
 - **Real Home Assistant**: the Supervisor loading the app, the Ingress panel, the `app_config` mount and backups
   are only covered by static rule checks, not by an installation.

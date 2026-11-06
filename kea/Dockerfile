@@ -25,6 +25,7 @@ CMD [ "/run.sh" ]
 # BUILD_VERSION / BUILD_ARCH are provided by the Supervisor (or the HA builder action).
 ARG BUILD_VERSION
 ARG BUILD_ARCH
+ENV BUILD_VERSION=${BUILD_VERSION}
 LABEL \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.type="app" \

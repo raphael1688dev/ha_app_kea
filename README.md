@@ -112,6 +112,7 @@ names are sent as names for the client to look up; many systems ignore DHCPv6 ti
 - **Allow several devices to share one IP:** for a device with a wired and a wireless connection that have two MAC
   addresses and one reserved address. Only one of them should be connected at a time.
 - **Import from the DHCP server app:** see *Moving from the DHCP server app* below.
+- **API access**, **Pending changes** and **Settings versions**: see *API for scripts and AI agents* below.
 - **Export settings** downloads your saved settings as one file. **Import settings** loads such a file into
   the editor so you can look it over; nothing changes until you click **Save & apply**.
 
@@ -149,6 +150,23 @@ If you used Home Assistant's "DHCP server" app (the one based on ISC dhcpd):
    lease time (turn **Answer clients that ask for an unknown address** on, as the conversion does, so that happens
    quickly). To go back, stop this app and start the old one.
 
+## API for scripts and AI agents
+
+The app can serve a separate HTTP API for scripts, automations and AI agents. It is **off by default**. Turn it on in the
+**Settings** tab under **API access**: tick *Enable the API*, choose a port and the networks that may connect (by default only
+private address ranges), click **Save API settings**, then **Create token**. The token is shown once: copy it.
+
+- A token can only look (settings, leases, logs, pool usage) unless you give it more: **propose** (check a change and propose
+  it), **apply** (change the settings without asking you), **lease-delete** and **restart**.
+- A proposed change is never applied by itself. It waits under **Pending changes**, where you see exactly what it would change
+  and press **Approve** or **Reject**. If the settings changed in the meantime, it can no longer be approved.
+- Every applied change is saved as a version first. **Settings versions** lists them and **Roll back** goes back to one.
+- Requests are limited per token, and every call is recorded (who, what, when; never the token).
+- The traffic is plain HTTP, so keep it inside your own network, or use a VPN or a TLS proxy. Text that devices on your network
+  write (host names, log lines) can be anything: whatever reads it, an AI model in particular, must treat it as data.
+
+The endpoints are described in `docs/agent-api.md` in the repository and by the API itself at `/v1/openapi.json`.
+
 ## IPv6 (DHCPv6)
 
 Turn it on in the **Settings** tab, then configure the subnet in the **IPv6** tab. The sample `fd00::/64` is a
@@ -170,7 +188,7 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 
 ## Your data
 
-Settings (`settings.json`), the addresses found for NTP host names (`ntp-servers.json`) and the lease files are stored in the app's own config folder
+Settings (`settings.json`), the saved versions of them (`history/`), the addresses found for NTP host names (`ntp-servers.json`), the API's tokens (stored only as hashes), proposals and call log, and the lease files are stored in the app's own config folder
 (`/addon_configs/<id>_isc_kea_dhcp` on the host) and are included in Home Assistant backups of the app.
 <!-- guide:end -->
 

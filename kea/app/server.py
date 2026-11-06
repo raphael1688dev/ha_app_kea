@@ -15,6 +15,8 @@ import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from agent_api import AgentApiServer
+from apiauth import ApiConfigError
 from manager import LOG_SOURCES, KeaManager, load_options, log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,14 +30,19 @@ def require_json(request: Request):
         raise HTTPException(415, "Content-Type must be application/json")
 
 
-def create_app(manager, allowed_ips):
+def create_app(manager, allowed_ips, agent=None):
+    """The Ingress Web UI. *agent* is the :class:`AgentApiServer` that the "API access" card switches on and off."""
     @asynccontextmanager
     async def lifespan(_app):
         manager.startup()
         threading.Thread(target=manager.watch, daemon=True).start()
         threading.Thread(target=manager.ntp_loop, daemon=True).start()
+        if agent:
+            agent.apply_config()                              # starts the API when the owner switched it on
         yield
         log("termination signal received, stopping Kea and the Web UI...")
+        if agent:
+            agent.stop()
         manager.shutdown()
 
     app = FastAPI(
@@ -138,6 +145,63 @@ def create_app(manager, allowed_ips):
         result = manager.refresh_ntp(force=True)
         return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
+    # ---------------------------------------------------- API access (Settings tab)
+    def agent_state():
+        return {"config": manager.apiconfig.public(),
+                "server": agent.status() if agent else {"running": False, "port": None, "error": ""},
+                "proposals": manager.proposals.list(), "history": manager.history.list()[:20],
+                "revision": manager.revision()}
+
+    @app.get("/api/agent")
+    def get_agent():
+        return agent_state()
+
+    @app.put("/api/agent/config", dependencies=[Depends(require_json)])
+    def put_agent_config(data: dict = Body(...)):
+        try:
+            manager.apiconfig.set_config(data.get("enabled"), data.get("port"), data.get("allowed_cidrs"))
+        except ApiConfigError as exc:
+            return JSONResponse({"ok": False, "errors": [str(exc)]}, status_code=400)
+        if agent:
+            agent.apply_config()
+        return dict(agent_state(), ok=True)
+
+    @app.post("/api/agent/tokens", dependencies=[Depends(require_json)])
+    def create_agent_token(data: dict = Body(...)):
+        try:
+            record, secret = manager.apiconfig.create_token(data.get("name"), data.get("scopes"))
+        except ApiConfigError as exc:
+            return JSONResponse({"ok": False, "errors": [str(exc)]}, status_code=400)
+        return {"ok": True, "token": record, "secret": secret}
+
+    @app.delete("/api/agent/tokens/{token_id}", dependencies=[Depends(require_json)])
+    def delete_agent_token(token_id: str):
+        if not manager.apiconfig.delete_token(token_id):
+            return JSONResponse({"ok": False, "errors": ["no such token"]}, status_code=404)
+        return {"ok": True}
+
+    @app.get("/api/agent/proposals/{proposal_id}")
+    def get_agent_proposal(proposal_id: str):
+        try:
+            return manager.proposals.get(proposal_id)
+        except Exception as exc:                              # ProposalError
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/agent/proposals/{proposal_id}/approve", dependencies=[Depends(require_json)])
+    def approve_agent_proposal(proposal_id: str):
+        result = manager.approve_proposal(proposal_id, approver="Web UI")
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.post("/api/agent/proposals/{proposal_id}/reject", dependencies=[Depends(require_json)])
+    def reject_agent_proposal(proposal_id: str):
+        result = manager.reject_proposal(proposal_id)
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+    @app.post("/api/history/{revision}/rollback", dependencies=[Depends(require_json)])
+    def rollback_to(revision: str):
+        result = manager.rollback(revision, source="Web UI")
+        return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
     return app
 
 
@@ -162,7 +226,7 @@ def main():
     bind = os.environ.get("KEA_UI_BIND", "0.0.0.0")
 
     log(f"Web UI listening on {bind}:{port} (allowed clients: {', '.join(sorted(allowed))})")
-    uvicorn.Server(make_config(create_app(manager, allowed), bind, port)).run()
+    uvicorn.Server(make_config(create_app(manager, allowed, AgentApiServer(manager)), bind, port)).run()
     return 0
 
 
