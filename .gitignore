@@ -5,3 +5,8 @@ __pycache__/
 CLAUDE.local.md
 # Personal notes that are not part of the project
 discuss-gemini.md
+# The owner's real network configuration (options of the old DHCP server app): addresses, MACs, device names.
+# Keep such files in /private/ or name them like this; never commit them.
+/private/
+DHCP_*.yaml
+old-dhcp-options.yaml

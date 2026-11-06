@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Importing from the DHCP server app: an entry listed twice with the same MAC address and the same address is kept once
+  and reported as a notice, not as an error.
+
 ## 2.3.0
 - Leases tab: tick several devices and click **Reserve selected** to turn their current addresses into reservations in
   one go. Devices with a private (random) MAC address are not ticked by default. A lease's hostname that is not a valid

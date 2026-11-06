@@ -139,7 +139,7 @@ If you used Home Assistant's "DHCP server" app (the one based on ISC dhcpd):
 2. In this app's **Settings** tab, paste it under **Import from the DHCP server app** and click
    **Convert and load**. Networks, devices, DNS, NTP servers, domain and lease times are loaded into the editor.
    A report lists what was changed or could not be carried over (for example a MAC address that is invalid, or
-   used twice).
+   used for two different addresses). An entry that is listed twice with the same MAC address and address is kept once.
 3. Look at the IPv4 tab, use **Check NTP servers** if you entered time servers, then click **Save & apply**.
 4. Stop the old app **before** you start this one, and give the Home Assistant machine a fixed address first.
    Existing leases are not carried over: devices get their address again when they renew, which takes at most one

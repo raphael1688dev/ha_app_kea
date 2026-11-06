@@ -79,6 +79,22 @@ def test_bad_hosts_are_skipped_and_reported_but_the_rest_is_kept(host, fragment)
     assert any("4 of 5 devices" in t for t in levels(result, "info"))
 
 
+def test_an_exact_duplicate_is_kept_once_and_is_not_an_error():
+    result = run(OLD + '  - {name: printer-again, mac: "aa-bb-cc-dd-ee-01", ip: 192.0.2.10}\n')
+    reservations = result["settings"]["dhcp4"]["subnets"][0]["reservations"]
+    assert result["complete"] and result["counts"]["error"] == 0 and len(reservations) == 4
+    assert [r["hostname"] for r in reservations if r["hw_address"] == "aa:bb:cc:dd:ee:01"] == ["printer"]   # first one wins
+    info = levels(result, "info")
+    assert any("duplicate is ignored" in t for t in info)
+    assert any("4 of 4 devices carried over (1 exact duplicate ignored)" in t for t in info)
+
+
+def test_the_same_mac_with_another_address_is_still_an_error():
+    result = run(OLD + '  - {name: printer-again, mac: "aa:bb:cc:dd:ee:01", ip: 192.0.2.99}\n')
+    assert not result["complete"] and any("already reserved" in t for t in levels(result, "error"))
+    assert not any("duplicate" in t for t in levels(result, "info"))
+
+
 def test_an_invalid_device_name_is_dropped_but_the_reservation_stays():
     result = run(OLD + '  - {name: "bad name!", mac: "aa:bb:cc:dd:ee:09", ip: 192.0.2.20}\n')
     res = result["settings"]["dhcp4"]["subnets"][0]["reservations"][-1]

@@ -156,7 +156,7 @@ def convert(options, default_interface="eth0"):
         report.add("error", "'hosts' must be a list")
         hosts_raw = []
     seen_macs, seen_ips, shared = {}, {}, set()
-    carried = 0
+    carried = duplicates = 0
     for index, host in enumerate(hosts_raw, start=1):
         if not isinstance(host, dict):
             report.add("error", f"host #{index}: invalid format, skipped")
@@ -177,10 +177,15 @@ def convert(options, default_interface="eth0"):
             report.add("error", f"{label}: {ip} is not inside any converted network, skipped")
             continue
         if mac in seen_macs:
+            if seen_macs[mac] == str(ip):
+                duplicates += 1
+                report.add("info", f"{label}: the same device and address are already listed above; "
+                                   "the duplicate is ignored")
+                continue
             report.add("error", f"{label}: MAC {mac} is already reserved for {seen_macs[mac]}; Kea allows one "
                                 "reservation per MAC address, skipped")
             continue
-        seen_macs[mac] = ip_text
+        seen_macs[mac] = str(ip)
         hostname = _text(host.get("name"))
         if hostname and not cfg._RESERVATION_HOSTNAME_RE.match(hostname):
             report.add("warn", f"{label}: name {hostname!r} is not a valid host name; the reservation is kept without it")
@@ -192,8 +197,10 @@ def convert(options, default_interface="eth0"):
             report.add("info", f"{label}: MAC written as {host.get('mac')} is stored as {mac}")
         target["reservations"].append({"hw_address": mac, "ip_address": str(ip), "hostname": hostname})
         carried += 1
-    skipped = len(hosts_raw) - carried
-    report.add("info", f"{carried} of {len(hosts_raw)} devices carried over" + (f", {skipped} skipped" if skipped else ""))
+    skipped = len(hosts_raw) - carried - duplicates
+    report.add("info", f"{carried} of {len(hosts_raw) - duplicates} devices carried over"
+                       + (f", {skipped} skipped" if skipped else "")
+                       + (f" ({duplicates} exact duplicate{'s' if duplicates != 1 else ''} ignored)" if duplicates else ""))
     if shared:
         report.add("info", f"{len(shared)} IP address(es) are reserved for more than one MAC address "
                            f"({', '.join(sorted(shared)[:5])}{'...' if len(shared) > 5 else ''}); \"Allow several devices to "
