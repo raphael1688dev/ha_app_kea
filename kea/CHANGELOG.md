@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.0
 - The app now talks to Kea through Kea's own control channel (a unix socket inside the container, never reachable from the
   network): **Delete** on the Leases tab removes the lease without stopping Kea, the Leases tab reads the leases from Kea
   itself, and Save & apply reloads with `config-reload`, so a configuration Kea refuses is reported with Kea's own message at
