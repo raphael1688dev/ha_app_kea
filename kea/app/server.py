@@ -15,7 +15,6 @@ import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from leases import read_leases
 from manager import LOG_SOURCES, KeaManager, load_options, log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,11 +76,7 @@ def create_app(manager, allowed_ips):
 
     @app.get("/api/leases")
     def leases():
-        return {
-            "dhcp4": read_leases(manager.lease_path("dhcp4")),
-            "dhcp6": read_leases(manager.lease_path("dhcp6"))
-            if "dhcp6" in manager.enabled else [],
-        }
+        return manager.get_leases()
 
     @app.put("/api/settings", dependencies=[Depends(require_json)])
     def put_settings(data: dict = Body(...)):

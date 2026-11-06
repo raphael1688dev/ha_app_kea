@@ -94,6 +94,46 @@ def read_leases(path, now=None):
     return leases
 
 
+# lease6-get-all "type" values
+_CONTROL_V6_KINDS = {"IA_NA": "address", "IA_TA": "temporary", "IA_PD": "prefix"}
+
+
+def from_control(items, family, now=None):
+    """Our lease dicts (the shape of :func:`read_leases`) from the ``leases`` list of ``lease4-get-all`` or
+    ``lease6-get-all``. Leases that are not in the default state or have run out are left out, as for the CSV."""
+    now = time.time() if now is None else now
+    is_v6 = family == "dhcp6"
+    leases = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        address = str(item.get("ip-address") or "").strip()
+        cltt, valid = _to_int(item.get("cltt")), _to_int(item.get("valid-lft"))
+        if not address or cltt is None or valid is None or valid == 0:
+            continue
+        expire = cltt + valid
+        if expire <= now or (_to_int(item.get("state")) or 0) != 0:
+            continue
+        kind = _CONTROL_V6_KINDS.get(str(item.get("type") or "IA_NA"), "address") if is_v6 else "address"
+        identifier = str((item.get("duid") if is_v6 else item.get("hw-address")) or "").strip()
+        hostname = str(item.get("hostname") or "").strip()
+        leases.append({
+            "address": address,
+            "kind": kind,
+            "prefix_len": _to_int(item.get("prefix-len")) if kind == "prefix" else None,
+            "identifier": identifier,
+            "hostname": hostname,
+            "reserve_hostname": reservable_hostname(hostname),
+            "random_mac": None if is_v6 else is_random_mac(identifier),
+            "subnet_id": _to_int(item.get("subnet-id")),
+            "valid_lifetime": valid,
+            "expire": expire,
+            "remaining": expire - int(now),
+        })
+    leases.sort(key=lambda lease: _sort_key(lease["address"]))
+    return leases
+
+
 def is_random_mac(mac):
     """True for a locally administered MAC address (bit 0x02 of the first octet).
 

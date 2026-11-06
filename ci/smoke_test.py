@@ -11,6 +11,7 @@ import copy
 import csv
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -18,6 +19,7 @@ import urllib.request
 
 BASE = os.environ.get("SMOKE_BASE", "http://127.0.0.1:8099")
 DATA_DIR = os.environ.get("SMOKE_DATA_DIR", "/config/kea")
+RUN_DIR = os.environ.get("SMOKE_RUN_DIR", "/run/kea")        # where Kea 3.0 keeps its control sockets
 # Kea log message ids that mean "the configuration or the lease file was not accepted".
 BAD_LOG_MARKERS = ("CONFIG_LOAD_FAIL", "CONFIG_FAILED", "LEASE_LOAD_ROW_ERROR", "LOAD_ROW_ERROR",
                    "LEASE_LOAD_ERROR", "FATAL")
@@ -97,6 +99,58 @@ def apply_settings(settings):
     return body
 
 
+def kea_command(name, arguments=None, daemon_name="kea4"):
+    """One command to the daemon's control socket (what the app itself does), without the app's help."""
+    request = {"command": name}
+    if arguments is not None:
+        request["arguments"] = arguments
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(20)
+        sock.connect(os.path.join(RUN_DIR, f"{daemon_name}-ctrl.sock"))
+        sock.sendall(json.dumps(request).encode())
+        data = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+            try:
+                return json.loads(data)
+            except ValueError:
+                continue
+    return json.loads(data)
+
+
+def control_lease_deletion():
+    """Kea's own lease commands: add a lease, see it in the app, delete it through the app without a restart."""
+    added = kea_command("lease4-add", {"ip-address": "192.168.1.150", "hw-address": "aa:bb:cc:dd:ee:99",
+                                       "subnet-id": 1, "valid-lft": 86400, "hostname": "smoke"})
+    if added.get("result") != 0:
+        raise Failure(f"Kea refused lease4-add: {added}")
+    leases = call("GET", "/api/leases")[1]["dhcp4"]
+    mine = [l for l in leases if l["address"] == "192.168.1.150"]
+    if not mine or mine[0]["identifier"] != "aa:bb:cc:dd:ee:99" or mine[0]["hostname"] != "smoke":
+        raise Failure(f"the lease added through Kea is not listed correctly by /api/leases: {mine}")
+    print("    the lease is listed (read through lease4-get-all)")
+    pid, mark = daemon()["pid"], last_seq()
+    code, body = call("DELETE", "/api/leases/dhcp4/192.168.1.150")
+    if code != 200:
+        raise Failure(f"deleting the lease failed (HTTP {code}): {body}")
+    d = daemon()
+    if not d["running"] or d["pid"] != pid:
+        raise Failure(f"kea-dhcp4 was restarted by the lease deletion (pid {pid} -> {d['pid']}); it should not be")
+    if "192.168.1.150" in [l["address"] for l in call("GET", "/api/leases")[1]["dhcp4"]]:
+        raise Failure("the lease is still listed after deletion")
+    again = kea_command("lease4-get", {"ip-address": "192.168.1.150"})
+    if again.get("result") != 3:
+        raise Failure(f"Kea still knows the deleted lease: {again}")
+    code, body = call("DELETE", "/api/leases/dhcp4/192.168.1.150")
+    if code != 400:
+        raise Failure(f"deleting a lease that does not exist should be refused, got HTTP {code}: {body}")
+    check_log_clean(mark, "the lease deletion")
+    print(f"    deleted without a restart (pid {pid}); deleting it again is refused: {(body or {}).get('errors')}")
+
+
 def run():
     step("waiting for Kea DHCPv4 to start")
     def started():
@@ -118,7 +172,7 @@ def run():
         raise Failure("kea-dhcp4 exited shortly after start")
     check_log_clean(0, "startup")
 
-    step("hot reload: apply a feature-rich configuration (expects SIGHUP, same process)")
+    step("hot reload: apply a feature-rich configuration (same process, no restart)")
     settings = call("GET", "/api/state")[1]["settings"]
     rich = copy.deepcopy(settings)
     sub = rich["dhcp4"]["subnets"][0]
@@ -142,6 +196,12 @@ def run():
     if not d["running"] or d["pid"] != pid:
         raise Failure(f"kea-dhcp4 did not survive the reload (running={d['running']}, pid {pid} -> {d['pid']})")
     check_log_clean(mark, "the SIGHUP reload")
+    if status().get("control_api"):
+        if not any("(control channel)" in e["line"] for e in log_entries() if e["seq"] > mark and e["source"] == "addon"):
+            raise Failure("the reload did not go through Kea's control channel although it is switched on")
+        print("    the reload went through the control channel (config-reload)")
+    else:
+        print("    NOTICE: the control channel is off (no lease hook installed); the reload used SIGHUP")
     reload_lines = [e["line"] for e in log_entries() if e["seq"] > mark and e["source"] == "dhcp4"]
     print(f"    still running as pid {pid}; Kea logged {len(reload_lines)} lines after the signal")
 
@@ -167,43 +227,47 @@ def run():
         raise Failure("kea-dhcp4 is not running after the rollback")
     print(f"    still running on {good_interface}, settings unchanged")
 
-    step("lease deletion: Kea must accept the lifetime-0 row we append")
-    lease_file = os.path.join(DATA_DIR, "kea-leases4.csv")
-    if os.path.isfile(lease_file):
-        with open(lease_file, newline="", encoding="utf-8") as fh:
-            header = next(csv.reader(fh))
+    if status().get("control_api"):
+        step("lease deletion through Kea's control channel (no restart)")
+        control_lease_deletion()
     else:
-        header = DEFAULT_V4_HEADER.split(",")
-        with open(lease_file, "w", newline="", encoding="utf-8") as fh:
-            csv.writer(fh, lineterminator="\n").writerow(header)
-    # Kea parses every non-text column as a number, so an empty value (e.g. pool_id) makes it
-    # discard the row ("bad lexical cast"). Real Kea writes 0 there; do the same.
-    text_columns = {"address", "hwaddr", "client_id", "hostname", "user_context", "duid"}
-    row = {name: ("" if name in text_columns else "0") for name in header}
-    row.update(address="192.168.1.150", hwaddr="aa:bb:cc:dd:ee:99", valid_lifetime="86400",
-               expire=str(int(time.time()) + 86400), subnet_id="1", hostname="smoke")
-    with open(lease_file, "a", newline="", encoding="utf-8") as fh:
-        csv.DictWriter(fh, fieldnames=header, lineterminator="\n").writerow(row)
-    leases = call("GET", "/api/leases")[1]["dhcp4"]
-    if "192.168.1.150" not in [l["address"] for l in leases]:
-        raise Failure("the seeded lease is not listed by /api/leases")
-    pid, mark = daemon()["pid"], last_seq()
-    code, body = call("DELETE", "/api/leases/dhcp4/192.168.1.150")
-    if code != 200:
-        raise Failure(f"deleting the lease failed (HTTP {code}): {body}")
-    wait_for(lambda: daemon()["running"] and daemon()["pid"] != pid, "kea-dhcp4 restarted after the delete")
-    time.sleep(4)
-    if not daemon()["running"]:
-        raise Failure("kea-dhcp4 died after reading the lease file with the deleted-lease row")
-    try:
-        check_log_clean(mark, "the lease deletion")
-    except Failure as exc:
-        with open(lease_file, encoding="utf-8") as fh:
-            tail = fh.read().splitlines()
-        raise Failure(f"{exc}\n  lease file header : {tail[0] if tail else '(empty)'}\n"
-                      + "\n".join(f"  lease file row {i}  : {line}" for i, line in enumerate(tail[1:][-4:], 1)))
-    if "192.168.1.150" in [l["address"] for l in call("GET", "/api/leases")[1]["dhcp4"]]:
-        raise Failure("the lease is still listed after deletion")
+        step("lease deletion: Kea must accept the lifetime-0 row we append")
+        lease_file = os.path.join(DATA_DIR, "kea-leases4.csv")
+        if os.path.isfile(lease_file):
+            with open(lease_file, newline="", encoding="utf-8") as fh:
+                header = next(csv.reader(fh))
+        else:
+            header = DEFAULT_V4_HEADER.split(",")
+            with open(lease_file, "w", newline="", encoding="utf-8") as fh:
+                csv.writer(fh, lineterminator="\n").writerow(header)
+        # Kea parses every non-text column as a number, so an empty value (e.g. pool_id) makes it
+        # discard the row ("bad lexical cast"). Real Kea writes 0 there; do the same.
+        text_columns = {"address", "hwaddr", "client_id", "hostname", "user_context", "duid"}
+        row = {name: ("" if name in text_columns else "0") for name in header}
+        row.update(address="192.168.1.150", hwaddr="aa:bb:cc:dd:ee:99", valid_lifetime="86400",
+                   expire=str(int(time.time()) + 86400), subnet_id="1", hostname="smoke")
+        with open(lease_file, "a", newline="", encoding="utf-8") as fh:
+            csv.DictWriter(fh, fieldnames=header, lineterminator="\n").writerow(row)
+        leases = call("GET", "/api/leases")[1]["dhcp4"]
+        if "192.168.1.150" not in [l["address"] for l in leases]:
+            raise Failure("the seeded lease is not listed by /api/leases")
+        pid, mark = daemon()["pid"], last_seq()
+        code, body = call("DELETE", "/api/leases/dhcp4/192.168.1.150")
+        if code != 200:
+            raise Failure(f"deleting the lease failed (HTTP {code}): {body}")
+        wait_for(lambda: daemon()["running"] and daemon()["pid"] != pid, "kea-dhcp4 restarted after the delete")
+        time.sleep(4)
+        if not daemon()["running"]:
+            raise Failure("kea-dhcp4 died after reading the lease file with the deleted-lease row")
+        try:
+            check_log_clean(mark, "the lease deletion")
+        except Failure as exc:
+            with open(lease_file, encoding="utf-8") as fh:
+                tail = fh.read().splitlines()
+            raise Failure(f"{exc}\n  lease file header : {tail[0] if tail else '(empty)'}\n"
+                          + "\n".join(f"  lease file row {i}  : {line}" for i, line in enumerate(tail[1:][-4:], 1)))
+        if "192.168.1.150" in [l["address"] for l in call("GET", "/api/leases")[1]["dhcp4"]]:
+            raise Failure("the lease is still listed after deletion")
 
     step("restart endpoint")
     pid = daemon()["pid"]

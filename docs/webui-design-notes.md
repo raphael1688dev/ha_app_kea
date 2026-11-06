@@ -35,7 +35,13 @@
   separate venv, `/opt/venv`, with every version pinned in `kea/requirements.txt` (`pydantic-core` is left to pydantic, which pins it exactly). Routes are plain `def` (they run in
   a thread pool because the manager blocks); `/docs` and `/openapi.json` are disabled.
 - Frontend: a single `index.html` in plain JavaScript, using **relative URLs** only so it works behind Ingress.
-- Leases: read straight from the memfile CSV; no `kea-ctrl-agent` (Kea 3.0 deprecated the Control Agent).
+- Kea control: no `kea-ctrl-agent` (deprecated in Kea 3.0, removed in 3.2). The app uses each daemon's own **unix control
+  socket** (`/run/kea/kea4-ctrl.sock`, `kea6-ctrl.sock`; Kea 3.0 only accepts sockets in `KEA_CONTROL_SOCKET_DIR`, mode 0750,
+  and hook libraries only from its hooks directory) and the `libdhcp_lease_cmds.so` hook (Alpine package `kea-hook-lease-cmds`):
+  `lease4-get-all` / `lease6-get-all` (leases), `lease4-del` / `lease6-del` (delete, no restart), `config-reload` (apply;
+  Kea answers whether it accepted the file). `kea_control.py` is the client. It is used only when the hook file exists
+  (`manager.control_api`); on any failure the app falls back to the lease CSV, editing the lease file and SIGHUP. The channel
+  is not exposed to the network (a unix socket); the HTTP control channel is deliberately not used.
 - Security: only connections from the Supervisor (`172.30.32.2`) are accepted, everything else gets 403; write
   endpoints require `Content-Type: application/json`.
 - Kea 3.0 configuration uses `output-options` (`output_options` is deprecated).

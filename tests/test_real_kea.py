@@ -29,7 +29,9 @@ def test_real_kea_is_installed():
 def kea_env(tmp_path):
     env = dict(os.environ)
     env.update({"KEA_DHCP_DATA_DIR": str(tmp_path), "KEA_PIDFILE_DIR": str(tmp_path),
-                "KEA_LOCKFILE_DIR": str(tmp_path), "KEA_LOG_FILE_DIR": str(tmp_path)})
+                "KEA_LOCKFILE_DIR": str(tmp_path), "KEA_LOG_FILE_DIR": str(tmp_path),
+                "KEA_CONTROL_SOCKET_DIR": str(tmp_path)})
+    os.chmod(tmp_path, 0o750)                      # Kea 3.0 wants the control socket directory to be 0750
     return env
 
 
@@ -196,3 +198,83 @@ def test_a_reserved_name_with_an_underscore_is_accepted_by_kea(tmp_path):
     s["dhcp4"]["subnets"][0]["reservations"] = [
         {"hw_address": "aa:bb:cc:dd:ee:01", "ip_address": "192.168.1.50", "hostname": "zhimi-fan-za5_mibtf763"}]
     assert_accepted(s, tmp_path)
+
+
+# ---- Kea's control channel and the lease hook ---------------------------------------------------------------
+CONTROL = {"socket": "kea4-ctrl.sock", "hooks": ["libdhcp_lease_cmds.so"]}
+
+
+def test_the_lease_hook_is_installed():
+    hook = os.path.join(os.environ.get("KEA_HOOKS_PATH") or "/usr/lib/kea/hooks", "libdhcp_lease_cmds.so")
+    if not os.path.exists(hook) and not REQUIRED:
+        pytest.skip("the lease hook library is not installed")
+    assert os.path.exists(hook), "kea-hook-lease-cmds is missing from the image"
+
+
+def test_the_control_socket_and_the_lease_hook_are_accepted_by_kea(tmp_path):
+    if not os.path.exists("/usr/lib/kea/hooks/libdhcp_lease_cmds.so") and not REQUIRED:
+        pytest.skip("the lease hook library is not installed")
+    clean, errors = cfg.validate(cfg.default_settings("eth0", True))
+    assert errors == []
+    v4 = cfg.render_dhcp4(clean, str(tmp_path / "leases4.csv"), control=CONTROL)
+    v6 = cfg.render_dhcp6(clean, str(tmp_path / "leases6.csv"), control={"socket": "kea6-ctrl.sock", "hooks": CONTROL["hooks"]})
+    for binary, rendered in (("kea-dhcp4", v4), ("kea-dhcp6", v6)):
+        result = run_test(binary, rendered, tmp_path)
+        assert result.returncode == 0, f"{binary} rejected the config:\n{result.stdout}{result.stderr}"
+
+
+@pytest.mark.skipif(not _usable_interface(), reason="no network interface other than lo")
+def test_a_running_kea_answers_the_commands_the_app_uses(tmp_path):
+    """The whole control path against the real daemon: status, add / list / delete a lease, reload the file."""
+    import time
+    import kea_control as kc
+    if not os.path.exists("/usr/lib/kea/hooks/libdhcp_lease_cmds.so") and not REQUIRED:
+        pytest.skip("the lease hook library is not installed")
+    iface = _usable_interface()
+    settings = cfg.default_settings(iface)
+    conf = tmp_path / "kea-dhcp4.conf"
+    conf.write_text(json.dumps(cfg.render_dhcp4(settings, str(tmp_path / "kea-leases4.csv"), control=CONTROL)))
+    env = kea_env(tmp_path)
+    proc = subprocess.Popen(["kea-dhcp4", "-c", str(conf)], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    sock = str(tmp_path / CONTROL["socket"])
+    try:
+        deadline = time.time() + 20
+        while not os.path.exists(sock) and proc.poll() is None and time.time() < deadline:
+            time.sleep(0.2)
+        assert proc.poll() is None, f"kea-dhcp4 exited: {proc.communicate(timeout=10)[0]}"
+        assert os.path.exists(sock), "no control socket appeared"
+
+        assert kc.command(sock, "status-get").ok
+
+        add = {"ip-address": "192.168.1.150", "hw-address": "aa:bb:cc:dd:ee:99", "subnet-id": 1,
+               "valid-lft": 3600, "hostname": "control-test"}
+        reply = kc.command(sock, "lease4-add", add)
+        assert reply.ok, reply
+
+        listed = kc.command(sock, "lease4-get-all")
+        assert listed.result in (kc.RESULT_OK,), listed
+        import leases as lease_files
+        mine = [l for l in lease_files.from_control(listed.arguments["leases"], "dhcp4") if l["address"] == "192.168.1.150"]
+        assert len(mine) == 1 and mine[0]["identifier"] == "aa:bb:cc:dd:ee:99" and mine[0]["hostname"] == "control-test"
+        assert 3000 < mine[0]["remaining"] <= 3600
+
+        assert kc.command(sock, "lease4-del", {"ip-address": "192.168.1.150"}).ok
+        again = kc.command(sock, "lease4-del", {"ip-address": "192.168.1.150"})
+        assert again.result == kc.RESULT_EMPTY, again               # the code the app turns into "no lease found"
+        left = kc.command(sock, "lease4-get-all")
+        assert left.result in (kc.RESULT_OK, kc.RESULT_EMPTY)
+        assert not [l for l in left.arguments.get("leases", []) if l.get("ip-address") == "192.168.1.150"]
+
+        # a changed file is picked up by config-reload, and a broken one is refused with a message
+        settings["dhcp4"]["subnets"][0]["lease_time"] = 7200
+        conf.write_text(json.dumps(cfg.render_dhcp4(settings, str(tmp_path / "kea-leases4.csv"), control=CONTROL)))
+        assert kc.command(sock, "config-reload", timeout=30).ok
+        conf.write_text("{ this is not json")
+        broken = kc.command(sock, "config-reload", timeout=30)
+        assert not broken.ok and broken.text
+        assert kc.command(sock, "status-get").ok                    # Kea keeps running on the old configuration
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.communicate(timeout=20)

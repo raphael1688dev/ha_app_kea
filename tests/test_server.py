@@ -39,6 +39,11 @@ class FakeManager:
         return {"ok": True, "changed": False}
     def shutdown(self): self.stopped = True
     def lease_path(self, name): return str(self.tmp_path / f"{name}.csv")
+
+    def get_leases(self):
+        from leases import read_leases
+        return {"dhcp4": read_leases(self.lease_path("dhcp4")),
+                "dhcp6": read_leases(self.lease_path("dhcp6")) if "dhcp6" in self.enabled else []}
     def status(self): return {"daemons": {}, "last_error": None}
 
     def apply(self, raw):

@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- The app now talks to Kea through Kea's own control channel (a unix socket inside the container, never reachable from the
+  network): **Delete** on the Leases tab removes the lease without stopping Kea, the Leases tab reads the leases from Kea
+  itself, and Save & apply reloads with `config-reload`, so a configuration Kea refuses is reported with Kea's own message at
+  once. If the channel does not answer, the app falls back to the old ways (editing the lease file, SIGHUP). Needs the Alpine
+  package `kea-hook-lease-cmds`, now part of the image.
+- The app has an icon and a logo: the Kea logo as ISC publishes it (see THIRD_PARTY_NOTICES.md).
 - First start on a machine without an `eth0` interface (for example `enp3s0`): the app no longer shows a red "Kea problem"
   because the default `eth0` does not exist. It uses the interface of the default route and waits, with a notice, until you
   click **Save & apply** for the first time; nothing is served before that. An interface name you typed yourself is never replaced.

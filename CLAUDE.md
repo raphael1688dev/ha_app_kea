@@ -85,6 +85,11 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 - Kea needs `ip-reservations-unique: false` for several reservations on one IP, `authoritative` is off by default
   (dhcpd's was on), and DHCPv6 NTP is option 56 with suboptions in the `v6-ntp-server-suboptions` space. These are
   covered by `tests/test_real_kea.py` and the smoke test, which only CI can run.
+- The app talks to Kea through the daemons' **unix control sockets** (`kea_control.py`, `manager.control_api`): Kea 3.0 only accepts a
+  control socket in `KEA_CONTROL_SOCKET_DIR` (mode 0750, we use `/run/kea`) and hook libraries only from its hooks directory, so the
+  config names them by file name only (`kea4-ctrl.sock`, `libdhcp_lease_cmds.so`). It is on only when that hook file exists, so
+  unit tests (fake Kea) and development machines use the file/SIGHUP fallbacks. Real behaviour (lease4-add/get-all/del, config-reload,
+  result 3 = nothing matched) is checked by `tests/test_real_kea.py` and the smoke test in CI only.
 - Web UI text from the network (lease hostnames) is untrusted: build DOM with `textContent`, never `innerHTML`.
 
 ## Not verified yet

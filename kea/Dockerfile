@@ -5,6 +5,7 @@ RUN apk add --no-cache \
         bash \
         kea-dhcp4 \
         kea-dhcp6 \
+        kea-hook-lease-cmds \
         py3-pip \
         python3
 

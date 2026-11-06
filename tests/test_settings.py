@@ -483,3 +483,17 @@ def test_settings_saved_before_these_fields_existed_still_load():
     assert errors == [] and cleaned["global"]["authoritative"] is False
     assert cleaned["dhcp4"]["subnets"][0]["max_lease_time"] is None
     assert cleaned["dhcp6"]["subnets"][0]["ntp_servers"] == []
+
+
+def test_control_socket_and_hooks_are_only_rendered_when_asked_for():
+    data = cfg.default_settings("eth0", True)
+    for render in (cfg.render_dhcp4, cfg.render_dhcp6):
+        plain = list(render(data, "/x").values())[0]
+        assert "control-sockets" not in plain and "hooks-libraries" not in plain
+    control = {"socket": "kea4-ctrl.sock", "hooks": ["libdhcp_lease_cmds.so"]}
+    v4 = cfg.render_dhcp4(data, "/x", control=control)["Dhcp4"]
+    assert v4["control-sockets"] == [{"socket-type": "unix", "socket-name": "kea4-ctrl.sock"}]
+    assert v4["hooks-libraries"] == [{"library": "libdhcp_lease_cmds.so"}]
+    v6 = cfg.render_dhcp6(data, "/x", control={"socket": "kea6-ctrl.sock"})["Dhcp6"]
+    assert v6["control-sockets"] == [{"socket-type": "unix", "socket-name": "kea6-ctrl.sock"}]
+    assert "hooks-libraries" not in v6

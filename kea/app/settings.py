@@ -598,7 +598,21 @@ def _option(name, data):
     return {"name": name, "data": data}
 
 
-def render_dhcp4(settings, lease_file, ntp_addresses=None):
+def _add_control(server, control):
+    """Open the daemon's control socket and load the hook libraries the app's commands need.
+
+    ``control`` is ``{"socket": "kea4-ctrl.sock", "hooks": ["libdhcp_lease_cmds.so"]}`` or None. Kea 3.0 accepts a
+    control socket only in its own socket directory and hook libraries only from its own hooks directory, so both
+    are given as bare file names.
+    """
+    if not control:
+        return
+    server["control-sockets"] = [{"socket-type": "unix", "socket-name": control["socket"]}]
+    if control.get("hooks"):
+        server["hooks-libraries"] = [{"library": name} for name in control["hooks"]]
+
+
+def render_dhcp4(settings, lease_file, ntp_addresses=None, control=None):
     subnets = []
     for s in settings["dhcp4"]["subnets"]:
         options = []
@@ -648,10 +662,11 @@ def render_dhcp4(settings, lease_file, ntp_addresses=None):
         server["authoritative"] = True
     if settings["global"].get("allow_shared_ips"):
         server["ip-reservations-unique"] = False
+    _add_control(server, control)
     return {"Dhcp4": server}
 
 
-def render_dhcp6(settings, lease_file):
+def render_dhcp6(settings, lease_file, control=None):
     subnets = []
     for s in settings["dhcp6"]["subnets"]:
         options = []
@@ -689,19 +704,19 @@ def render_dhcp6(settings, lease_file):
                 for r in s["reservations"]
             ]
         subnets.append(entry)
-    return {
-        "Dhcp6": {
-            "interfaces-config": {"interfaces": [settings["global"]["interface"]]},
-            "lease-database": {
-                "type": "memfile", "persist": True,
-                "name": lease_file, "lfc-interval": 3600,
-            },
-            "valid-lifetime": 86400,
-            "preferred-lifetime": 43200,
-            "subnet6": subnets,
-            "loggers": _logger("kea-dhcp6"),
-        }
+    server = {
+        "interfaces-config": {"interfaces": [settings["global"]["interface"]]},
+        "lease-database": {
+            "type": "memfile", "persist": True,
+            "name": lease_file, "lfc-interval": 3600,
+        },
+        "valid-lifetime": 86400,
+        "preferred-lifetime": 43200,
+        "subnet6": subnets,
+        "loggers": _logger("kea-dhcp6"),
     }
+    _add_control(server, control)
+    return {"Dhcp6": server}
 
 
 def _drop_empty(d):

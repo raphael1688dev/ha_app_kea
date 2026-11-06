@@ -744,3 +744,162 @@ def test_saved_settings_with_a_missing_interface_are_not_changed(tmp_path, fake_
         assert not m.status()["awaiting_setup"] and m.status()["interface"] == "eth0"
     finally:
         m.shutdown()
+
+
+# ------------------------------------------------------------------ Kea's control channel
+from fake_control import FakeControl  # noqa: E402
+
+
+@pytest.fixture
+def controlled(tmp_path, fake_kea):
+    """A manager that uses the control channel, with a fake daemon behind kea4-ctrl.sock (and the fake processes)."""
+    fakes = []
+    m = KeaManager({"interface": "eth0", "enable_dhcp6": True}, str(tmp_path / "etc"), str(tmp_path / "data"))
+    m.settle_seconds, m.reload_grace = 0.4, 0
+    m.control_api = True
+
+    def attach(handler=None, name="kea4-ctrl.sock"):
+        fake = FakeControl(handler, name=name)
+        fakes.append(fake)
+        m.run_dir = fake.dir
+        return fake
+    m.attach = attach
+    yield m
+    m.shutdown()
+    for fake in fakes:
+        fake.close()
+
+
+def kea_lease4(address, host="h", hw="b4:bb:cc:dd:ee:01", state=0, valid=3600, age=0, subnet=1):
+    return {"ip-address": address, "hw-address": hw, "hostname": host, "state": state, "subnet-id": subnet,
+            "valid-lft": valid, "cltt": int(time.time()) - age}
+
+
+def test_the_control_channel_is_used_only_when_the_lease_hook_is_installed(tmp_path, monkeypatch):
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    monkeypatch.setenv("KEA_HOOKS_PATH", str(hooks))
+    monkeypatch.delenv("KEA_APP_CONTROL", raising=False)
+    assert not KeaManager({}, str(tmp_path / "e1"), str(tmp_path / "d1")).control_api
+    (hooks / "libdhcp_lease_cmds.so").write_bytes(b"")
+    assert KeaManager({}, str(tmp_path / "e2"), str(tmp_path / "d2")).control_api
+    monkeypatch.setenv("KEA_APP_CONTROL", "0")
+    assert not KeaManager({}, str(tmp_path / "e3"), str(tmp_path / "d3")).control_api
+
+
+def test_the_rendered_config_opens_the_socket_and_loads_the_hook(controlled):
+    controlled.attach()
+    controlled.startup()
+    with open(controlled._conf_path("dhcp4"), encoding="utf-8") as fh:
+        v4 = json.load(fh)["Dhcp4"]
+    assert v4["control-sockets"] == [{"socket-type": "unix", "socket-name": "kea4-ctrl.sock"}]
+    assert v4["hooks-libraries"] == [{"library": "libdhcp_lease_cmds.so"}]
+    with open(controlled._conf_path("dhcp6"), encoding="utf-8") as fh:
+        assert json.load(fh)["Dhcp6"]["control-sockets"][0]["socket-name"] == "kea6-ctrl.sock"
+    assert controlled.status()["control_api"] is True
+
+
+def test_leases_come_from_kea_when_it_answers(controlled):
+    items = [kea_lease4("192.168.1.20", "laptop"), kea_lease4("192.168.1.3", "phone", hw="aa:bb:cc:dd:ee:02"),
+             kea_lease4("192.168.1.30", "declined", state=1), kea_lease4("192.168.1.31", "old", valid=60, age=600)]
+    fake = controlled.attach(lambda c, a: {"result": 0, "arguments": {"leases": items}} if c == "lease4-get-all"
+                             else {"result": 3, "text": "0 IPv6 lease(s) found."})
+    controlled.startup()
+    leases = controlled.get_leases()
+    assert [l["address"] for l in leases["dhcp4"]] == ["192.168.1.3", "192.168.1.20"]       # sorted, active only
+    phone = leases["dhcp4"][0]
+    assert (phone["identifier"], phone["hostname"], phone["random_mac"], phone["subnet_id"]) == (
+        "aa:bb:cc:dd:ee:02", "phone", True, 1)
+    assert 3500 < phone["remaining"] <= 3600 and phone["kind"] == "address"
+    assert leases["dhcp6"] == []
+    assert ("lease4-get-all", None) in fake.calls
+
+
+def test_an_empty_answer_means_no_leases_not_a_failure(controlled):
+    controlled.attach(lambda c, a: {"result": 3, "text": "0 IPv4 lease(s) found."})
+    controlled.startup()
+    write_leases(controlled, ("192.168.1.101", "stale-csv"))          # the CSV must not be consulted
+    assert controlled.get_leases()["dhcp4"] == []
+
+
+@pytest.mark.parametrize("mode", ["garbage", "silent"])
+def test_leases_fall_back_to_the_files_when_the_channel_misbehaves(controlled, mode):
+    fake = controlled.attach()
+    controlled.control_timeout = 0.3
+    controlled.startup()
+    write_leases(controlled, ("192.168.1.101", "from-csv"))
+    fake.mode = mode
+    assert [l["hostname"] for l in controlled.get_leases()["dhcp4"]] == ["from-csv"]
+
+
+def test_deleting_a_lease_goes_through_kea_without_stopping_it(controlled):
+    fake = controlled.attach()
+    controlled.startup()
+    old = pid(controlled)
+    assert controlled.delete_lease("dhcp4", "192.168.1.102") == {"ok": True}
+    assert fake.calls[-1] == ("lease4-del", {"ip-address": "192.168.1.102"})
+    assert pid(controlled) == old and controlled.status()["daemons"]["dhcp4"]["running"]
+    assert "deleted lease 192.168.1.102" in log_text(controlled)
+
+
+def test_deleting_an_unknown_lease_says_so_and_a_refusal_shows_kea_s_words(controlled):
+    answers = iter([{"result": 3, "text": "IPv4 lease not found."}, {"result": 1, "text": "lease database error"}])
+    controlled.attach(lambda c, a: next(answers))
+    controlled.startup()
+    assert controlled.delete_lease("dhcp4", "192.168.1.102") == {"ok": False, "errors": ["no lease found for 192.168.1.102"]}
+    assert controlled.delete_lease("dhcp4", "192.168.1.102") == {"ok": False, "errors": ["lease database error"]}
+
+
+def test_an_ipv6_address_is_tried_as_an_address_and_then_as_a_delegated_prefix(controlled):
+    fake = controlled.attach(lambda c, a: {"result": 3, "text": "not found"} if a["type"] == "IA_NA" else {"result": 0},
+                             name="kea6-ctrl.sock")
+    controlled.startup()
+    assert controlled.delete_lease("dhcp6", "2001:db8:1::") == {"ok": True}
+    assert [a["type"] for c, a in fake.calls if c == "lease6-del"] == ["IA_NA", "IA_PD"]
+
+
+def test_a_silent_channel_falls_back_to_editing_the_lease_file(controlled):
+    fake = controlled.attach()
+    fake.mode = "garbage"
+    write_leases(controlled, ("192.168.1.101", "keep"), ("192.168.1.102", "drop"))
+    controlled.startup()
+    old = pid(controlled)
+    assert controlled.delete_lease("dhcp4", "192.168.1.102") == {"ok": True}
+    assert [l["address"] for l in lease_files.read_leases(controlled.lease_path("dhcp4"))] == ["192.168.1.101"]
+    assert pid(controlled) != old                                       # the old method restarts the daemon
+    assert "editing the lease file" in log_text(controlled)
+
+
+def test_a_reload_goes_through_the_channel_not_a_signal(controlled, good):
+    fake = controlled.attach()
+    controlled.startup()
+    old = pid(controlled)
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert controlled.apply(good)["ok"]
+    assert ("config-reload", None) in fake.calls
+    assert pid(controlled) == old
+    text = log_text(controlled)
+    assert "reloaded kea-dhcp4 configuration (control channel)" in text and "SIGHUP" not in text
+
+
+def test_a_reload_that_kea_refuses_is_rolled_back_with_kea_s_own_message(controlled, good):
+    controlled.attach(lambda c, a: {"result": 1, "text": "unsupported parameter 'x'"} if c == "config-reload"
+                      else {"result": 0})
+    controlled.startup()
+    before = json.dumps(controlled.settings, sort_keys=True)
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    result = controlled.apply(good)
+    assert not result["ok"]
+    assert any("refused the new configuration: unsupported parameter 'x'" in e for e in result["errors"])
+    assert "previous configuration was restored" in result["errors"][-1]
+    assert json.dumps(controlled.settings, sort_keys=True) == before
+
+
+def test_a_channel_that_does_not_answer_falls_back_to_the_signal(controlled, good):
+    fake = controlled.attach()
+    fake.mode = "garbage"
+    controlled.startup()
+    good["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert controlled.apply(good)["ok"]
+    text = log_text(controlled)
+    assert "did not answer on its control socket" in text and "reloading kea-dhcp4 configuration (SIGHUP)" in text

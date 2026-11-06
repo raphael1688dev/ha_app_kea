@@ -146,3 +146,38 @@ def test_minimum_core_version_covers_the_app_config_mount(config):
     match = re.fullmatch(r"(\d{4})\.(\d{1,2})\.(\d+)", minimum)
     assert match, f"{minimum!r} is not a Home Assistant version like 2026.7.0"
     assert (int(match.group(1)), int(match.group(2))) >= (2026, 7)
+
+
+def png_size(path):
+    with open(path, "rb") as fh:
+        head = fh.read(24)
+    assert head[:8] == b"\x89PNG\r\n\x1a\n", f"{path} is not a PNG file"
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def test_the_app_has_an_icon_and_a_logo():
+    """Without them the Supervisor shows the generic puzzle piece. icon.png has to be square."""
+    width, height = png_size(os.path.join(APP_DIR, "icon.png"))
+    assert width == height and 64 <= width <= 512
+    width, height = png_size(os.path.join(APP_DIR, "logo.png"))
+    assert width >= 100 and height >= 100
+    for name in ("icon.png", "logo.png"):
+        assert os.path.getsize(os.path.join(APP_DIR, name)) < 100_000
+
+
+def test_the_logo_is_credited_to_its_owner():
+    with open(os.path.join(ROOT, "THIRD_PARTY_NOTICES.md"), encoding="utf-8") as fh:
+        notices = fh.read()
+    assert "isc.org/isclogos" in notices and "belong to ISC" in notices
+    with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
+        assert "Kea logo, which belongs to ISC" in fh.read()
+
+
+def test_the_image_installs_the_lease_hook_the_app_loads():
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "kea", "app"))
+    import manager
+    with open(os.path.join(APP_DIR, "Dockerfile"), encoding="utf-8") as fh:
+        dockerfile = fh.read()
+    assert "kea-hook-lease-cmds" in dockerfile, "the package that ships " + manager.LEASE_HOOK
+    assert manager.LEASE_HOOK == "libdhcp_lease_cmds.so" and manager.HOOKS_DIR == "/usr/lib/kea/hooks"

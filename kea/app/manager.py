@@ -11,15 +11,22 @@ import subprocess
 import threading
 import time
 
+import kea_control
 import leases as lease_files
 import migrate
 import ntpcheck
 import settings as cfg
 
 DAEMONS = {
-    "dhcp4": {"binary": "kea-dhcp4", "conf": "kea-dhcp4.conf", "leases": "kea-leases4.csv"},
-    "dhcp6": {"binary": "kea-dhcp6", "conf": "kea-dhcp6.conf", "leases": "kea-leases6.csv"},
+    "dhcp4": {"binary": "kea-dhcp4", "conf": "kea-dhcp4.conf", "leases": "kea-leases4.csv",
+              "socket": "kea4-ctrl.sock"},
+    "dhcp6": {"binary": "kea-dhcp6", "conf": "kea-dhcp6.conf", "leases": "kea-leases6.csv",
+              "socket": "kea6-ctrl.sock"},
 }
+RUN_DIR = "/run/kea"                         # pid, lock and (Kea 3.0 only accepts it here) control socket files
+HOOKS_DIR = "/usr/lib/kea/hooks"             # the only place Kea 3.0 loads hook libraries from
+LEASE_HOOK = "libdhcp_lease_cmds.so"         # lease4-get-all, lease4-del, ... (Alpine package kea-hook-lease-cmds)
+RELOAD_TIMEOUT = 20.0
 PERSISTENT_MOUNT = "/config"   # where the `app_config` map is mounted in the container
 LOG_LIMIT = 3000
 # After applying settings we watch the daemons for a moment: Kea can accept a config file in `-t` and still
@@ -126,17 +133,29 @@ class KeaManager:
         self._log_seq = 0
         self._log_lock = threading.Lock()
 
-        for path in (self.conf_dir, self.data_dir, "/run/kea"):
+        self.run_dir = RUN_DIR
+        for path in (self.conf_dir, self.data_dir, self.run_dir):
             try:
                 os.makedirs(path, exist_ok=True)
             except OSError:
                 pass  # e.g. /run is not writable when developing locally
+        try:
+            os.chmod(self.run_dir, 0o750)    # Kea 3.0 refuses a control socket in a directory with other rights
+        except OSError:
+            pass
+        # Talk to Kea through its control channel when the lease hook is installed (the image has it; a development
+        # machine usually does not). KEA_APP_CONTROL=0 switches it off. Without it the app edits files and signals.
+        self.control_api = (os.environ.get("KEA_APP_CONTROL") != "0"
+                            and os.path.exists(os.path.join(os.environ.get("KEA_HOOKS_PATH") or HOOKS_DIR, LEASE_HOOK)))
+        self.control_timeout = kea_control.DEFAULT_TIMEOUT
+        self._control_problems = []
 
         self.env = dict(os.environ)
         self.env.update({
             "KEA_DHCP_DATA_DIR": self.data_dir,
-            "KEA_PIDFILE_DIR": "/run/kea",
-            "KEA_LOCKFILE_DIR": "/run/kea",
+            "KEA_PIDFILE_DIR": self.run_dir,
+            "KEA_LOCKFILE_DIR": self.run_dir,
+            "KEA_CONTROL_SOCKET_DIR": self.run_dir,
             "KEA_LOG_FILE_DIR": self.data_dir,
         })
 
@@ -354,11 +373,25 @@ class KeaManager:
             return {name: dict(entry, due=entry["checked"] + self.ntp_refresh_seconds)
                     for name, entry in self.ntp.items()}
 
+    # ------------------------------------------------------ control channel
+    def _control_config(self, name):
+        if not self.control_api:
+            return None
+        return {"socket": DAEMONS[name]["socket"], "hooks": [LEASE_HOOK]}
+
+    def _control(self, name, command, arguments=None, timeout=None):
+        """Send *command* to the running daemon *name*. Returns a Reply, or None when the channel is not in use
+        (switched off, or the daemon is not running). Raises KeaControlError when the daemon does not answer."""
+        if not self.control_api or not self._running(name):
+            return None
+        path = kea_control.socket_path(self.run_dir, DAEMONS[name]["socket"])
+        return kea_control.command(path, command, arguments, timeout or self.control_timeout)
+
     # ------------------------------------------------------- render / test
     def _render(self, name, data):
         if name == "dhcp4":
-            return cfg.render_dhcp4(data, self.lease_path(name), self._ntp_addresses())
-        return cfg.render_dhcp6(data, self.lease_path(name))
+            return cfg.render_dhcp4(data, self.lease_path(name), self._ntp_addresses(), self._control_config(name))
+        return cfg.render_dhcp6(data, self.lease_path(name), self._control_config(name))
 
     def _stage_and_test(self, data):
         """Write *.new files and run `kea -t`. Returns a list of problems."""
@@ -443,6 +476,7 @@ class KeaManager:
         only starts or stops kea-dhcp6. Returns which daemons were reloaded / restarted / started / stopped.
         """
         wanted = [] if self.awaiting_setup else self.enabled
+        self._control_problems = []
         interface_changed = (previous is None
                              or self._global_of(previous)["interface"] != self.interface)
         changes = {"reloaded": [], "restarted": [], "started": [], "stopped": []}
@@ -455,14 +489,34 @@ class KeaManager:
                     changes["stopped"].append(name)
                 self._stop(name)
             elif was_running and not interface_changed and now - started_at >= self.reload_grace:
-                self._log(f"reloading {DAEMONS[name]['binary']} configuration (SIGHUP)")
-                self.procs[name].send_signal(signal.SIGHUP)
+                self._reload(name)
                 changes["reloaded"].append(name)
             else:
                 self._stop(name)
                 self._start(name)
                 changes["restarted" if was_running else "started"].append(name)
         return changes
+
+    def _reload(self, name):
+        """Make the running daemon read its (already written) config file again.
+
+        Through the control channel this answers at once whether Kea accepted the file; otherwise (channel off or
+        not answering) the daemon gets SIGHUP and the outcome only shows in its log, which _settle watches.
+        """
+        binary = DAEMONS[name]["binary"]
+        try:
+            reply = self._control(name, "config-reload", timeout=RELOAD_TIMEOUT)
+        except kea_control.KeaControlError as exc:
+            self._log(f"{binary} did not answer on its control socket ({exc}); sending SIGHUP instead")
+            reply = None
+        if reply is None:
+            self._log(f"reloading {binary} configuration (SIGHUP)")
+            self.procs[name].send_signal(signal.SIGHUP)
+        elif reply.ok:
+            self._log(f"reloaded {binary} configuration (control channel)")
+        else:
+            self._log(f"{binary} refused the new configuration: {reply.text}")
+            self._control_problems.append(f"{binary} refused the new configuration: {reply.text}")
 
     def _snapshot(self):
         """Current settings.json and generated configs, so a failed apply can be undone."""
@@ -518,7 +572,7 @@ class KeaManager:
         """Watch the daemons for a moment after an apply; return the problems found (empty list = fine)."""
         deadline = time.time() + self.settle_seconds
         while True:
-            problems = self._check_daemons(mark)
+            problems = self._control_problems + self._check_daemons(mark)
             if problems or time.time() >= deadline:
                 return problems
             time.sleep(0.2)
@@ -651,8 +705,23 @@ class KeaManager:
         """Addresses of this machine on the DHCP interface (the app runs in the host network)."""
         return {"interface": self.interface, **addresses_of(self.interface)}
 
+    def get_leases(self):
+        """The active leases: from Kea itself when the control channel is in use, else from the lease files."""
+        return {"dhcp4": self._leases("dhcp4"),
+                "dhcp6": self._leases("dhcp6") if "dhcp6" in self.enabled else []}
+
+    def _leases(self, family):
+        command = "lease4-get-all" if family == "dhcp4" else "lease6-get-all"
+        try:
+            reply = self._control(family, command)
+        except kea_control.KeaControlError:
+            reply = None                                       # fall back to the files (the daemon may be starting)
+        if reply is not None and reply.result in (kea_control.RESULT_OK, kea_control.RESULT_EMPTY):
+            return lease_files.from_control(reply.arguments.get("leases"), family)
+        return lease_files.read_leases(self.lease_path(family))
+
     def delete_lease(self, family, address):
-        """Remove a lease by appending a lifetime-0 row while the daemon is stopped."""
+        """Remove a lease: through Kea's control channel when possible, else by editing the lease file."""
         if family not in DAEMONS:
             return {"ok": False, "errors": ["unknown address family"]}
         try:
@@ -663,23 +732,51 @@ class KeaManager:
             return {"ok": False, "errors": ["address does not match the address family"]}
         address = str(ip)
         with self.lock:
-            path = self.lease_path(family)
-            fieldnames, row = lease_files.find_latest_row(path, address)
-            if row is None or str(row.get("valid_lifetime", "")).strip() == "0":
-                return {"ok": False, "errors": [f"no lease found for {address}"]}
-            was_running = self._running(family)
-            error = None
-            self._stop(family)
-            try:
-                lease_files.append_deleted_row(path, fieldnames, row)
-                self._log(f"deleted lease {address}")
-            except OSError as exc:
-                error = f"could not update the lease file: {exc}"
-            if was_running and family in self.enabled:
-                self._start(family)          # do not resurrect a daemon that was stopped on purpose or failed
-            if error:
-                return {"ok": False, "errors": [error]}
-            return {"ok": True}
+            done = self._delete_lease_via_kea(family, address)
+            if done is not None:
+                return done
+            return self._delete_lease_in_file(family, address)
+
+    def _delete_lease_via_kea(self, family, address):
+        """The result of lease4-del / lease6-del, or None when the control channel cannot be used."""
+        command = "lease4-del" if family == "dhcp4" else "lease6-del"
+        # an IPv6 address may be a normal address or a delegated prefix; the command needs to be told which
+        attempts = [{"ip-address": address}] if family == "dhcp4" else [
+            {"ip-address": address, "type": "IA_NA"}, {"ip-address": address, "type": "IA_PD"}]
+        try:
+            for arguments in attempts:
+                reply = self._control(family, command, arguments)
+                if reply is None:
+                    return None
+                if reply.ok:
+                    self._log(f"deleted lease {address}")
+                    return {"ok": True}
+                if reply.result != kea_control.RESULT_EMPTY:
+                    return {"ok": False, "errors": [reply.text or "Kea refused to delete the lease"]}
+        except kea_control.KeaControlError as exc:
+            self._log(f"could not delete lease {address} through the control channel ({exc}); editing the lease file")
+            return None
+        return {"ok": False, "errors": [f"no lease found for {address}"]}
+
+    def _delete_lease_in_file(self, family, address):
+        """Remove a lease by appending a lifetime-0 row while the daemon is stopped."""
+        path = self.lease_path(family)
+        fieldnames, row = lease_files.find_latest_row(path, address)
+        if row is None or str(row.get("valid_lifetime", "")).strip() == "0":
+            return {"ok": False, "errors": [f"no lease found for {address}"]}
+        was_running = self._running(family)
+        error = None
+        self._stop(family)
+        try:
+            lease_files.append_deleted_row(path, fieldnames, row)
+            self._log(f"deleted lease {address}")
+        except OSError as exc:
+            error = f"could not update the lease file: {exc}"
+        if was_running and family in self.enabled:
+            self._start(family)          # do not resurrect a daemon that was stopped on purpose or failed
+        if error:
+            return {"ok": False, "errors": [error]}
+        return {"ok": True}
 
     def list_interfaces(self):
         names, default = network_interfaces()
@@ -715,6 +812,7 @@ class KeaManager:
                 "daemons": daemons,
                 "last_error": self.last_error,
                 "awaiting_setup": self.awaiting_setup,
+                "control_api": self.control_api,
                 "storage_persistent": self.storage_persistent(),
             }
 
