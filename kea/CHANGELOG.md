@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.0
+- New: an HTTP API for scripts and AI agents (Settings tab, **API access**; off by default). Tokens with scopes (a new token can
+  only read), a dry run that uses Kea's own configuration test, small named operations (add or change a reservation, pools,
+  lease times ...), and **proposals**: a change that an agent proposes waits under **Pending changes** until you approve it.
+  Every applied change is saved as a version (**Settings versions**, **Roll back**). Calls are rate limited and logged, and
+  text from the network (host names, logs) is marked as untrusted. See `docs/agent-api.md`.
+
 ## 2.4.0
 - The app now talks to Kea through Kea's own control channel (a unix socket inside the container, never reachable from the
   network): **Delete** on the Leases tab removes the lease without stopping Kea, the Leases tab reads the leases from Kea
