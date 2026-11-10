@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.6.0
 - A new installation no longer starts the DHCP server by itself. Before, starting the app on a machine with an `eth0`
   interface served the example subnet 192.168.1.0/24 at once, which on such a network meant a second DHCP server before
   you had configured anything. Now Kea is started by your first **Save & apply**; until then a notice says so. Installations
