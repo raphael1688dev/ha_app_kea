@@ -659,6 +659,34 @@ async function loadAgentPending() {
   renderAgentPending();                         // not the form above it: that would wipe what is being typed
 }
 
+// Copy text to the clipboard. navigator.clipboard only exists on HTTPS pages (and localhost); Home Assistant is very
+// often opened as http://<address>:8123, where it is undefined, so fall back to the old selection-based command.
+// Resolves to false when nothing worked, and the caller must say so: a "Copied" that did not copy is worse than none.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch (e) { /* not allowed here: try the other way */ }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.append(area);
+  let done = false;
+  try { area.select(); area.setSelectionRange(0, text.length); done = document.execCommand("copy"); }
+  catch (e) { done = false; }
+  area.remove();
+  return done;
+}
+
+function selectText(el) {
+  if (!el) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function when(sec) { return sec ? new Date(sec * 1000).toLocaleString() : "never"; }
 
 function renderAgentConfig() {
@@ -698,8 +726,12 @@ function renderAgentConfig() {
         catch (e) { showErrors(e.errors); }
       } }, "Delete")))), "No tokens yet"),
     newSecret ? h("div", { class: "banner warn" }, "Token " + newSecret.name + " (shown only once, copy it now):",
-      h("div", { class: "mono", style: "margin:8px 0;user-select:all" }, newSecret.secret),
-      h("button", { class: "sm", onclick: () => { try { navigator.clipboard.writeText(newSecret.secret); toast("Copied"); } catch (e) { toast("Select the text and copy it", "err"); } } }, "Copy"),
+      h("div", { class: "mono", id: "newsecret", style: "margin:8px 0;user-select:all" }, newSecret.secret),
+      h("button", { class: "sm", onclick: async () => {
+        if (await copyText(newSecret.secret)) { toast("Copied to the clipboard"); return; }
+        selectText(document.getElementById("newsecret"));
+        showErrors(["The browser did not allow copying. The token is selected: press Ctrl+C (Cmd+C on a Mac) to copy it."], "warn");
+      } }, "Copy"),
       " ", h("button", { class: "sm", onclick: () => { newSecret = null; renderAgentConfig(); } }, "I have saved it")) : null,
     h("div", { class: "fields" },
       h("div", {}, h("label", {}, "New token name"), textInput(tokenForm, "name", { placeholder: "home-agent" })),

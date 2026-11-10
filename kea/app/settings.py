@@ -604,11 +604,12 @@ def validate(raw, fallback_global=None):
 # Kea config rendering
 # --------------------------------------------------------------------------
 def _logger(name):
-    return [{
-        "name": name,
-        "output-options": [{"output": "stdout"}],
-        "severity": "INFO",
-    }]
+    """Everything at INFO to stdout (the app collects it), except the command channel: Kea writes one COMMAND_RECEIVED
+    line for every command, and the app asks for the leases every few seconds while the Leases tab is open, which
+    pushed the useful lines out of the log. Problems with commands (WARN and above) are still logged."""
+    output = [{"output": "stdout"}]
+    return [{"name": name, "output-options": output, "severity": "INFO"},
+            {"name": f"{name}.commands", "output-options": output, "severity": "WARN"}]
 
 
 def _option(name, data):

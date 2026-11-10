@@ -277,4 +277,7 @@ def test_a_running_kea_answers_the_commands_the_app_uses(tmp_path):
     finally:
         if proc.poll() is None:
             proc.terminate()
-        proc.communicate(timeout=20)
+        output = proc.communicate(timeout=20)[0]
+    # the commands above must not each leave a line in the log (the app polls the leases), but the rest stays at INFO
+    assert "Received command 'lease4-get-all'" not in output and "Received command 'status-get'" not in output, output[-2000:]
+    assert "DHCP4_STARTED" in output or "DHCPSRV_MEMFILE" in output, output[-2000:]

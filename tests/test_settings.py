@@ -530,3 +530,12 @@ def test_the_number_of_ntp_addresses_sent_is_bounded_and_every_name_contributes(
     few = cfg.render_dhcp4(cleaned, "/x", {"n0.test": ["198.51.0.1", "198.51.0.2"], "n1.test": ["198.51.1.1"]})
     assert [o for o in few["Dhcp4"]["subnet4"][0]["option-data"] if o["name"] == "ntp-servers"][0]["data"] == \
         "198.51.0.1, 198.51.0.2, 198.51.1.1"
+
+
+def test_the_command_channel_only_logs_problems():
+    """One INFO line per command (the app polls the leases) would drown the rest of the log."""
+    data = cfg.default_settings("eth0", True)
+    for render, name in ((cfg.render_dhcp4, "kea-dhcp4"), (cfg.render_dhcp6, "kea-dhcp6")):
+        loggers = list(render(data, "/x").values())[0]["loggers"]
+        assert [(l["name"], l["severity"]) for l in loggers] == [(name, "INFO"), (f"{name}.commands", "WARN")]
+        assert all(l["output-options"] == [{"output": "stdout"}] for l in loggers)

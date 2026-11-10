@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+- Logs: Kea no longer writes a line for every command the app sends it (one every ten seconds while the Leases tab was
+  open), which pushed the useful lines out of the log. Problems with commands are still logged.
+- Fix: the **Copy** button for a new API token did nothing when Home Assistant is opened over plain `http://` (browsers
+  only offer the modern clipboard there on HTTPS), and it was easy to miss that it had failed. It now copies in that case
+  too, and if the browser refuses, the token is selected and a notice says to press Ctrl+C / Cmd+C.
+- Documentation: the guide said that individual DHCP requests are not logged. They are (Kea 3.0 writes a few lines for
+  every request it answers), which is the first thing to look at when a device gets no address.
+
 ## 2.6.0
 - A new installation no longer starts the DHCP server by itself. Before, starting the app on a machine with an `eth0`
   interface served the example subnet 192.168.1.0/24 at once, which on such a network meant a second DHCP server before
