@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.6.1
 - Logs: Kea no longer writes a line for every command the app sends it (one every ten seconds while the Leases tab was
   open), which pushed the useful lines out of the log. Problems with commands are still logged.
 - Fix: the **Copy** button for a new API token did nothing when Home Assistant is opened over plain `http://` (browsers
