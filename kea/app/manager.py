@@ -106,16 +106,16 @@ class KeaManager:
         # has a "global" section, the Web UI is the source of truth.
         interface = str(options.get("interface") or DEFAULT_INTERFACE)
         # Nobody chose `eth0`, it is just the option's default, and many machines (enp3s0, ...) have no such interface.
-        # Use the interface of the default route then, and serve nothing until the first Save & apply: the sample
-        # subnet is not the user's network. A name the user typed is never replaced (a typo must not start a DHCP
-        # server on another interface).
+        # Use the interface of the default route then. A name the user typed is never replaced (a typo must not
+        # start a DHCP server on another interface).
         self.auto_interface = None
         if interface == DEFAULT_INTERFACE:
             names, route = network_interfaces()
             if names and interface not in names and route in names:
                 interface = self.auto_interface = route
         self.default_global = cfg.default_global(interface, bool(options.get("enable_dhcp6")))
-        self.awaiting_setup = False         # set in startup(): auto-selected interface and nothing saved yet
+        self.awaiting_setup = False         # set in startup(): nothing saved yet, so nothing is served yet
+        self.settings_saved = False         # set by load_settings(): the settings come from settings.json
         self.settings_path = os.path.join(data_dir, "settings.json")
         self.ntp_path = os.path.join(data_dir, "ntp-servers.json")
         self.ntp = {}                       # host name -> {"addresses", "checked", "error", "stale"}
@@ -227,6 +227,9 @@ class KeaManager:
         return cfg.default_settings(g["interface"], g["enable_dhcp6"])
 
     def load_settings(self):
+        """The saved settings, or the defaults when there are none that can be used. ``self.settings_saved`` says which:
+        with defaults nothing is served until the first Save & apply (see startup)."""
+        self.settings_saved = False
         try:
             with open(self.settings_path, encoding="utf-8") as fh:
                 raw = json.load(fh)
@@ -243,7 +246,10 @@ class KeaManager:
             return self._default_settings()
         if errors:
             self._log("settings.json has problems: " + "; ".join(errors))
-        return cleaned if cleaned else self._default_settings()
+        if not cleaned:
+            return self._default_settings()
+        self.settings_saved = True
+        return cleaned
 
     def _save_settings(self, data):
         tmp = self.settings_path + ".tmp"
@@ -612,11 +618,16 @@ class KeaManager:
             self.settings = self.load_settings()
             self.history.save(self.settings, "startup")            # a starting point to roll back to
             self._load_ntp()
-            self.awaiting_setup = bool(self.auto_interface) and not os.path.exists(self.settings_path)
+            # Without saved settings there is only the sample subnet (192.168.1.0/24), which is not the user's network,
+            # or worse, is: then starting Kea would put a second DHCP server next to the router before anything was
+            # configured. So a fresh install serves nothing until the first Save & apply.
+            self.awaiting_setup = not self.settings_saved
             if self.awaiting_setup:
-                self._log(f"The interface option is the default (eth0) but this machine has no such interface. "
-                          f"Using {self.auto_interface}, the interface of the default route. Kea is not started "
-                          "until you click Save & apply in the Web UI for the first time.")
+                if self.auto_interface:
+                    self._log(f"The interface option is the default (eth0) but this machine has no such interface; "
+                              f"using {self.auto_interface}, the interface of the default route.")
+                self._log("No saved settings yet: Kea is not started until you check the settings in the Web UI and "
+                          "click Save & apply for the first time.")
         # No network access here: DHCP must not wait for DNS. Saved addresses are used even when they are older than
         # an hour; names never resolved yet are filled in by ntp_loop a few seconds after start.
         with self.lock:
@@ -734,8 +745,11 @@ class KeaManager:
             return checked
         if checked["unchanged"]:
             return dict(checked, ok=False, errors=["this change would not alter the settings"])
-        proposal = self.proposals.create(token_name, checked["settings"], checked["base_revision"],
-                                         checked["changes"], note)
+        try:
+            proposal = self.proposals.create(token_name, checked["settings"], checked["base_revision"],
+                                             checked["changes"], note)
+        except proposal_store.ProposalError as exc:
+            return {"ok": False, "errors": [str(exc)], "code": exc.code}
         return {"ok": True, "proposal": proposal}
 
     def approve_proposal(self, proposal_id, approver="ui"):
@@ -784,7 +798,6 @@ class KeaManager:
         for family in ("dhcp4", "dhcp6"):
             if family == "dhcp6" and "dhcp6" not in self.enabled:
                 continue
-            addresses = [ipaddress.ip_address(l["address"]) for l in leases[family] if l.get("kind") == "address"]
             for subnet in self.settings[family]["subnets"]:
                 pools = [(int(ipaddress.ip_address(p["start"])), int(ipaddress.ip_address(p["end"]))) for p in subnet["pools"]]
                 size = sum(b - a + 1 for a, b in pools)
@@ -951,6 +964,7 @@ class KeaManager:
                 "daemons": daemons,
                 "last_error": self.last_error,
                 "awaiting_setup": self.awaiting_setup,
+                "auto_interface": self.auto_interface if self.awaiting_setup else None,
                 "control_api": self.control_api,
                 "storage_persistent": self.storage_persistent(),
             }

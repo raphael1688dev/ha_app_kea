@@ -29,6 +29,7 @@ UI_TERMS = [
     "API access", "Enable the API", "Save API settings", "Create token", "Pending changes", "Approve", "Reject",
     "Settings versions", "Roll back",
     "Request failed", "Kea problem", "Persistent storage is not mounted",        # banners
+    "Kea is not running yet",
 ]
 
 

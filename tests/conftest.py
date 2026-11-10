@@ -42,6 +42,15 @@ def fake_kea(tmp_path, monkeypatch):
     return bindir
 
 
+def seed_settings(data_dir, interface="eth0", enable_dhcp6=False):
+    """Write a settings.json, as an installation that has been set up has one. Without it the app waits for the first
+    Save & apply and starts no daemon (a fresh install must not serve the sample subnet)."""
+    import json
+    os.makedirs(data_dir, exist_ok=True)
+    with open(os.path.join(data_dir, "settings.json"), "w", encoding="utf-8") as fh:
+        json.dump(cfg.default_settings(interface, enable_dhcp6), fh)
+
+
 @pytest.fixture
 def good():
     """A valid settings dict (deep copy of the defaults)."""

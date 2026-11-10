@@ -48,12 +48,10 @@ def query(address, port=NTP_PORT, timeout=2.0, retries=1, clock=time.time):
         try:
             with socket.socket(family, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(timeout)
+                sock.connect((address, port))            # the kernel then only delivers packets from that server
                 sent = clock()
-                sock.sendto(request, (address, port))
-                while True:                              # ignore packets that are not from the server we asked
-                    data, source = sock.recvfrom(1024)
-                    if source[0] == address or ipaddress.ip_address(source[0]) == ipaddress.ip_address(address):
-                        break
+                sock.send(request)
+                data = sock.recv(1024)
                 received = clock()
         except socket.timeout:
             reason = "no answer"
@@ -126,15 +124,20 @@ def check_servers(entries, families=(socket.AF_INET,), probe=query, resolver=soc
     Each result is what :func:`query` returns; a result judged a falseticker is turned into ``ok: False``.
     """
     servers, jobs, seen = [], [], set()
+    entries = [e for e in (str(entry).strip() for entry in entries) if e]
+    # Look the names up side by side: with a DNS server that does not answer, one lookup after the other would make
+    # "Save & apply" wait for the sum of all the timeouts.
+    names = list(dict.fromkeys(e for e in entries if not _is_ip(e)))
+    resolved = {}
+    if names:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, len(names))) as pool:
+            resolved = dict(zip(names, pool.map(lambda name: resolve(name, families, resolver), names)))
     for entry in entries:
-        entry = str(entry).strip()
-        if not entry:
-            continue
         item = {"server": entry, "kind": "address" if _is_ip(entry) else "hostname", "error": "", "addresses": []}
         if item["kind"] == "address":
             addresses = [str(ipaddress.ip_address(entry))]
         else:
-            addresses, item["error"] = resolve(entry, families, resolver)
+            addresses, item["error"] = resolved[entry]
         servers.append(item)
         for address in addresses:
             problem = unusable_address(address)

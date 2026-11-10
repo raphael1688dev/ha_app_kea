@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import agent_api
 import settings as cfg
 from agent_api import AgentApiServer, RateLimiter, clean_text, create_agent_app
+from conftest import seed_settings
 from manager import KeaManager
 
 ADD_PRINTER = [{"op": "add_reservation", "family": "dhcp4", "subnet_id": 1, "identifier": "aa:bb:cc:dd:ee:20",
@@ -21,6 +22,7 @@ HEADER4 = "address,hwaddr,client_id,valid_lifetime,expire,subnet_id,fqdn_fwd,fqd
 
 @pytest.fixture
 def mgr(tmp_path, fake_kea):
+    seed_settings(tmp_path / "data")
     m = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
     m.settle_seconds, m.reload_grace = 0.4, 0
     m.apiconfig.set_config(True, 8100, ["192.168.88.0/24", "127.0.0.0/8"])
@@ -91,7 +93,7 @@ def test_the_audit_log_names_the_token_and_the_call_but_never_the_secret_or_the_
 def test_writes_are_rate_limited_per_token(mgr):
     now = {"t": 5000.0}
     api = Api(mgr, clock=lambda: now["t"])
-    a, b = api.token(), api.token()
+    a, b = api.token("propose"), api.token("propose")
     codes = [api.post("/v1/ntp/check", headers=a, json={"servers": []}).status_code for _ in range(agent_api.WRITE_LIMIT_PER_MINUTE + 1)]
     assert codes[:-1] == [200] * agent_api.WRITE_LIMIT_PER_MINUTE and codes[-1] == 429
     limited = api.post("/v1/ntp/check", headers=a, json={"servers": []})
@@ -151,7 +153,7 @@ def test_leases_can_be_filtered_and_untrusted_text_is_cleaned(api, mgr):
 
 
 def test_clean_text():
-    assert clean_text("a\x00b\nc d", 10) == "a b c d" and clean_text(None, 5) == "" and len(clean_text("x" * 50, 5)) == 5
+    assert clean_text("a\x00b\nc\u2028d", 10) == "a b c d" and clean_text(None, 5) == "" and len(clean_text("x" * 50, 5)) == 5
 
 
 def test_logs_utilization_and_ntp(api, mgr):
@@ -262,10 +264,22 @@ def test_delete_a_lease_and_restart(api, mgr):
     assert api.post("/v1/restart", headers=h).json()["data"]["daemons"]["dhcp4"]["running"]
 
 
-def test_ntp_check_needs_a_list(api):
-    h = api.token()
+def test_ntp_check_needs_a_list_and_more_than_a_read_only_token(api):
+    h = api.token("propose")
     assert api.post("/v1/ntp/check", headers=h, json={"servers": []}).status_code == 200
     assert api.post("/v1/ntp/check", headers=h, json={"servers": "x"}).status_code == 422
+    # it makes this machine send packets to hosts the caller names, so "read" is not enough
+    assert api.post("/v1/ntp/check", headers=api.token(), json={"servers": ["192.0.2.1"]}).status_code == 403
+
+
+def test_the_number_of_undecided_proposals_is_limited(api, mgr):
+    import proposals
+    h = api.token("propose")
+    for i in range(proposals.MAX_PENDING):
+        mgr.proposals.create("agent", {"v": i}, mgr.revision(), ["x"], "n")
+    r = api.post("/v1/proposals", headers=h, json={"operations": ADD_PRINTER})
+    assert r.status_code == 409 and error_code(r) == "conflict" and "waiting for a decision" in r.json()["error"]["message"]
+    assert len(mgr.proposals.list("pending")) == proposals.MAX_PENDING
 
 
 # ------------------------------------------------------------------ the server around it

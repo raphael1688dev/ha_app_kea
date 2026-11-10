@@ -130,9 +130,34 @@ def test_describe_changes_in_plain_sentences(doc):
     assert ops.describe_changes(doc, doc) == []
 
 
-def test_describe_a_removed_subnet_and_custom_options(doc):
+def test_describe_says_what_is_in_custom_options_and_prefix_pools(doc):
+    """A person approves a proposal on this text alone, so it must show the values, not just "changed"."""
     new = copy.deepcopy(doc)
     new["dhcp6"]["subnets"] = []
-    new["dhcp4"]["subnets"][0]["custom_options"] = [{"name": "boot-file-name", "data": "x"}]
+    doc["dhcp4"]["subnets"][0]["custom_options"] = [{"name": "tftp-server-name", "data": "192.168.1.5"},
+                                                    {"name": "boot-file-name", "data": "old.0"}]
+    new["dhcp4"]["subnets"][0]["custom_options"] = [{"name": "boot-file-name", "data": "evil.0"},
+                                                    {"name": "wpad-url", "data": "http://198.51.100.9/wpad.dat"}]
     lines = ops.describe_changes(doc, new)
-    assert any("subnet fd00::/64 removed" in l for l in lines) and any("custom options changed" in l for l in lines)
+    assert any("subnet fd00::/64 removed" in l for l in lines)
+    assert any("custom option boot-file-name: old.0 -> evil.0" in l for l in lines)
+    assert any("custom option wpad-url added: http://198.51.100.9/wpad.dat" in l for l in lines)
+    assert any("custom option tftp-server-name removed (was 192.168.1.5)" in l for l in lines)
+    v6 = copy.deepcopy(doc)
+    v6["dhcp6"]["subnets"][0]["pd_pools"] = [{"prefix": "2001:db8:1::", "prefix_len": 48, "delegated_len": 64}]
+    assert any("prefix delegation pool 2001:db8:1::/48 (delegating /64) added" in l for l in ops.describe_changes(doc, v6))
+
+
+def test_an_added_subnet_is_described_with_everything_in_it(doc):
+    new = copy.deepcopy(doc)
+    new["dhcp4"]["subnets"].append({
+        "id": 2, "subnet": "10.20.0.0/24", "router": "10.20.0.1", "dns": ["198.51.100.53"], "domain_name": "", "domain_search": [],
+        "ntp_servers": [], "custom_options": [{"name": "boot-file-name", "data": "x.0"}], "lease_time": 600, "max_lease_time": None,
+        "pools": [{"start": "10.20.0.10", "end": "10.20.0.99"}],
+        "reservations": [{"hw_address": "aa:bb:cc:dd:ee:77", "ip_address": "10.20.0.5", "hostname": "cam"}]})
+    text = "\n".join(ops.describe_changes(doc, new))
+    for fragment in ("dhcp4: subnet 10.20.0.0/24 added", "dns (none) -> 198.51.100.53", "router (none) -> 10.20.0.1",
+                     "lease_time (none) -> 600", "pool 10.20.0.10 - 10.20.0.99 added", "custom option boot-file-name added: x.0",
+                     "reservation added: aa:bb:cc:dd:ee:77 -> 10.20.0.5 (cam)"):
+        assert fragment in text, fragment
+    assert "domain_name" not in text and "max_lease_time" not in text          # empty fields are not listed

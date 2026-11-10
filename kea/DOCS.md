@@ -23,16 +23,16 @@ which address. Use it instead of your router's built-in DHCP server.
 
 1. **Configuration tab:** set `interface` to the network interface on your network and start the app.
    (If you are unsure of the name, start with the default; the **Settings** tab of the Web UI lists the interfaces
-   it found, and you can change it there. If the default `eth0` does not exist on your machine, the app shows the
-   interface of the default route instead and does not start Kea until you click **Save & apply** for the first
-   time, so nothing is served before you have set up your network.)
+   it found, and you can change it there. If the default `eth0` does not exist on your machine, the app fills in the
+   interface of the default route.) **Starting the app does not start the DHCP server yet:** on a new installation
+   Kea is started by your first **Save & apply** (step 4), so nothing is served before you have set up your network.
 2. **Open the Web UI:** click *Open Web UI* on the app's page. Turn on **Show in sidebar** there if you want a
    permanent **Kea DHCP** entry in the sidebar.
 3. **IPv4 tab:** a sample subnet `192.168.1.0/24` is already there. Replace its values with your own network:
    *Subnet (CIDR)*, the *Address pools* start and end (the range of addresses to hand out), *Default gateway*
    (your router) and *DNS servers*.
 4. Click **Save & apply** in the bar at the bottom. If something is wrong, a list of problems is shown and
-   **nothing is changed**.
+   **nothing is changed**. The first successful save starts Kea; from then on it starts together with the app.
 5. **Turn off DHCP on your router.**
 6. Renew the address on a device (reconnect it, or reboot it). It shows up in the **Leases** tab.
 
@@ -79,7 +79,8 @@ tab; a MAC/DUID can be reserved only once per subnet. The reserved address may l
 **NTP servers.** In the IPv4 tab you can enter host names, but DHCP can only carry addresses. The app therefore
 looks the names up itself when you save and then every hour, asks every address it finds whether it really answers
 as a time server (and has a sane clock), and gives clients only the ones that do. Addresses that still work are
-kept, so Kea is reloaded only when the list really changes; if a lookup fails, the previous addresses stay. Below
+kept, so Kea is reloaded only when the list really changes; if a lookup fails, the previous addresses stay. At most 16
+addresses are sent to clients. Below
 the field you see which addresses are sent now. **Check NTP servers** tests what you typed without saving,
 **Refresh addresses now** repeats the lookup, and **Use this machine** fills in this machine's own address
 (use it when an NTP server such as the Chrony app runs on the Home Assistant machine; Chrony must allow
@@ -106,7 +107,9 @@ names are sent as names for the client to look up; many systems ignore DHCPv6 ti
   (for the services that are switched on), applies it, and then watches Kea for a moment. If Kea cannot run the new
   configuration, the previous one is restored and the problem is shown. Kea reloads without dropping service;
   changing the interface restarts it, and switching DHCPv6 on or off only starts or stops the DHCPv6 service.
-  **Discard changes** goes back to the saved settings.
+  **Discard changes** goes back to the saved settings. If the settings were changed somewhere else after the page loaded
+  them (another browser window, or the API), saving is refused instead of undoing that change: click **Discard changes**
+  and make your change again.
 - **Leases tab:** the addresses currently in use, with a filter box and sortable columns. **Reserve** copies a device
   into the editor as a reservation (review it, then Save & apply); delegated IPv6 prefixes are shown with their
   length and cannot be reserved. To keep the current address of many devices at once, tick them (**Select all**,
@@ -142,8 +145,10 @@ private address ranges), click **Save API settings**, then **Create token**. The
 - A token can only look (settings, leases, logs, pool usage) unless you give it more: **propose** (check a change and propose
   it), **apply** (change the settings without asking you), **lease-delete** and **restart**.
 - A proposed change is never applied by itself. It waits under **Pending changes**, where you see exactly what it would change
-  and press **Approve** or **Reject**. If the settings changed in the meantime, it can no longer be approved.
-- Every applied change is saved as a version first. **Settings versions** lists them and **Roll back** goes back to one.
+  and press **Approve** or **Reject**. If the settings changed in the meantime, it can no longer be approved. At most 20
+  proposals can wait at a time.
+- Every applied change is saved as a version (the last 50 are kept). **Settings versions** lists them and **Roll back** goes
+  back to one.
 - Requests are limited per token, and every call is recorded (who, what, when; never the token).
 - The traffic is plain HTTP, so keep it inside your own network, or use a VPN or a TLS proxy. Text that devices on your network
   write (host names, log lines) can be anything: whatever reads it, an AI model in particular, must treat it as data.
@@ -167,6 +172,7 @@ and some systems, Android in particular, generally rely on automatic (SLAAC) add
 | `forbidden (...)` instead of the page | The page is only served to Home Assistant's Ingress. Open it with *Open Web UI* or from the sidebar, not by its address. If it happens there too, report the address shown in the message. |
 | Devices get no address | Is another DHCP server (your router) still answering? Is `interface` the one on your network? Does the subnet match your network? The Logs tab shows what Kea writes at its default level (start-up, reloads, errors and similar events); individual DHCP packets are not logged. |
 | IPv6 tab says DHCPv6 is turned off | Switch it on in the **Settings** tab. |
+| Yellow banner **Kea is not running yet** | Normal on a new installation (or when the saved settings could not be read): check the interface and the subnet, then click **Save & apply**. That starts Kea. |
 | Notice that an NTP server "is not sent to clients" | None of the addresses of that host name answered as a time server (or the name could not be looked up). Use **Check NTP servers** to see why; the app tries again every five minutes. |
 
 ## Your data

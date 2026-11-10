@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+- A new installation no longer starts the DHCP server by itself. Before, starting the app on a machine with an `eth0`
+  interface served the example subnet 192.168.1.0/24 at once, which on such a network meant a second DHCP server before
+  you had configured anything. Now Kea is started by your first **Save & apply**; until then a notice says so. Installations
+  that have saved settings are not affected. (If you never saved anything in the Web UI, click **Save & apply** once after
+  updating.)
+- Fix: importing from the DHCP server app misread unquoted values the way old YAML does. A MAC address made only of
+  digits (such as `10:20:30:40:50:11`) was taken for a number and the device skipped, and a device named `yes`, `on` or
+  `0123` got another name. They are read as written now.
+- Fix: the Web UI no longer overwrites a change it has not seen. If the settings were changed somewhere else (another
+  browser window, or the API) after the page loaded them, Save & apply is refused and tells you to reload.
+- Fix: a mistyped address such as `999.1.1.1` or `192.168.1` was accepted as an NTP host name; it is refused now. At most
+  16 NTP addresses are sent to clients (many host names could exceed what a DHCP option holds).
+- API: at most 20 proposals can wait for a decision (a token could fill the disk before); the list of changes a person
+  approves now shows the values of custom options, prefix delegation pools and the content of a new subnet instead of just
+  "changed"; `POST /v1/ntp/check` needs the `propose` scope, because it sends requests to hosts the caller names.
+- NTP check: host names are looked up side by side (a dead DNS server no longer multiplies the wait), and a closed port is
+  reported at once.
+
 ## 2.5.0
 - New: an HTTP API for scripts and AI agents (Settings tab, **API access**; off by default). Tokens with scopes (a new token can
   only read), a dry run that uses Kea's own configuration test, small named operations (add or change a reservation, pools,

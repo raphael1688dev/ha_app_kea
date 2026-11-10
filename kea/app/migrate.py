@@ -6,6 +6,7 @@ changed and what was left out, so nothing is lost silently. Nothing is applied h
 editor for review.
 """
 import ipaddress
+import re
 
 import yaml
 
@@ -16,13 +17,31 @@ KNOWN_NETWORK_KEYS = {"subnet", "netmask", "range_start", "range_end", "broadcas
 MAX_REPORT_LINES = 300
 
 
+class _Loader(yaml.SafeLoader):
+    """SafeLoader that reads plain scalars the way Home Assistant writes them (YAML 1.2), not the YAML 1.1 way.
+
+    PyYAML follows YAML 1.1, where ``10:20:30:40:50:11`` is a base-60 number, ``yes`` / ``on`` are booleans, ``0123`` is
+    octal and ``2024-01-15`` a date. Home Assistant's editor writes a MAC address or a device name like that without
+    quotes, so they must stay text. Only true/false, null and plain whole numbers are converted.
+    """
+
+
+_Loader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers
+            if tag not in ("tag:yaml.org,2002:int", "tag:yaml.org,2002:float", "tag:yaml.org,2002:bool",
+                           "tag:yaml.org,2002:timestamp")]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+_Loader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+_Loader.add_implicit_resolver("tag:yaml.org,2002:int", re.compile(r"^[-+]?(?:0|[1-9][0-9]*)$"), list("-+0123456789"))
+
+
 def parse_text(text):
     """YAML (or JSON, which is YAML) to a Python value. Aliases are refused: a small document can expand to gigabytes."""
     try:
-        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+        for event in yaml.parse(text, Loader=_Loader):
             if isinstance(event, yaml.AliasEvent):
                 raise ValueError("YAML aliases (&anchor / *alias) are not supported")
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=_Loader)                # a SafeLoader subclass: no arbitrary objects
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         where = f" (line {mark.line + 1})" if mark else ""

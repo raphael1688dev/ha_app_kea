@@ -11,13 +11,14 @@ import time
 
 EXPIRE_SECONDS = 7 * 24 * 3600
 MAX_PROPOSALS = 100                      # finished ones are dropped first when this is exceeded
+MAX_PENDING = 20                         # undecided ones; each holds a full copy of the settings
 PENDING, APPLIED, REJECTED, FAILED = "pending", "applied", "rejected", "failed"
 
 
 class ProposalError(Exception):
     def __init__(self, message, code="invalid"):
         super().__init__(message)
-        self.code = code                 # invalid | not_found | stale | not_pending
+        self.code = code                 # invalid | not_found | stale | not_pending | too_many
 
 
 class Proposals:
@@ -57,6 +58,9 @@ class Proposals:
     def create(self, token_name, settings, base_revision, changes, note=""):
         with self._lock:
             self._expire()
+            if sum(1 for p in self._items if p["status"] == PENDING) >= MAX_PENDING:
+                raise ProposalError(f"{MAX_PENDING} proposals are already waiting for a decision; "
+                                    "they have to be approved or rejected in the Web UI first", "too_many")
             record = {"id": secrets.token_hex(4), "created": int(self.clock()), "token": token_name,
                       "note": str(note or "")[:500], "base_revision": base_revision, "changes": list(changes),
                       "settings": settings, "status": PENDING, "decided": None, "result": ""}

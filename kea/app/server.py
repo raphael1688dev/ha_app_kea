@@ -75,7 +75,7 @@ def create_app(manager, allowed_ips, agent=None):
 
     @app.get("/api/state")
     def state():
-        return {"status": manager.status(), "settings": manager.settings}
+        return {"status": manager.status(), "settings": manager.settings, "revision": manager.revision()}
 
     @app.get("/api/status")
     def status():
@@ -86,8 +86,15 @@ def create_app(manager, allowed_ips, agent=None):
         return manager.get_leases()
 
     @app.put("/api/settings", dependencies=[Depends(require_json)])
-    def put_settings(data: dict = Body(...)):
-        result = manager.apply(data)
+    def put_settings(data: dict = Body(...), revision: str = ""):
+        # The page says which version its editor was filled from; if the settings were changed since (through the
+        # API, or in another browser window) the save is refused instead of silently undoing that change.
+        result = manager.apply(data, expected_revision=revision or None)
+        if result.get("stale"):
+            result["errors"] = ["The settings were changed somewhere else (another browser window or the API) after this "
+                                "page loaded them, so nothing was saved. Click \"Discard changes\" to load the current "
+                                "settings, then make your change again."]
+            return JSONResponse(result, status_code=409)
         return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
     @app.post("/api/restart", dependencies=[Depends(require_json)])

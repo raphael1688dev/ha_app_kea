@@ -167,6 +167,12 @@ def ntp6_suboption(entry):
     return "ntp-server-multicast" if address.is_multicast else "ntp-server-address"
 
 
+def _is_host_name(name):
+    """A DNS name, as opposed to a mistyped address: "999.1.1.1" or "192.168.1" would pass as labels, but no top-level
+    domain is a number, so a name whose last label is all digits is refused."""
+    return bool(_HOSTNAME_RE.match(name)) and not name.rsplit(".", 1)[-1].isdigit()
+
+
 def _parse_ntp4_list(value):
     """DHCPv4 NTP servers: IPv4 addresses or host names (the app resolves names). Returns (entries, bad)."""
     good, bad = [], []
@@ -175,7 +181,7 @@ def _parse_ntp4_list(value):
             address = ipaddress.ip_address(part)
         except ValueError:
             name = part.rstrip(".").lower()
-            (good if _HOSTNAME_RE.match(name) and not name.isdigit() else bad).append(name if _HOSTNAME_RE.match(name) else part)
+            (good if _is_host_name(name) else bad).append(name if _is_host_name(name) else part)
             continue
         (good if address.version == 4 else bad).append(str(address) if address.version == 4 else part)
     return good, bad
@@ -194,13 +200,24 @@ def ntp_hostnames(settings):
     return names
 
 
+MAX_NTP_ADDRESSES = 16      # sent to a client; a DHCPv4 option holds 255 bytes (63 addresses) and clients use a handful
+
+
 def _ntp4_addresses(entries, resolved):
-    """Replace host names by the addresses the app resolved and checked; unresolved names are left out."""
+    """Replace host names by the addresses the app resolved and checked; unresolved names are left out.
+
+    At most MAX_NTP_ADDRESSES are returned. When there are more, every entry contributes in turn, so one name with many
+    addresses cannot push the others out.
+    """
+    groups = [[a for a in (resolved or {}).get(entry, [entry] if _is_address(entry) else [])] for entry in entries]
+    flat = list(dict.fromkeys(a for group in groups for a in group))
+    if len(flat) <= MAX_NTP_ADDRESSES:
+        return flat
     out = []
-    for entry in entries:
-        for address in (resolved or {}).get(entry, [entry] if _is_address(entry) else []):
-            if address not in out:
-                out.append(address)
+    for rank in range(max(len(g) for g in groups)):
+        for group in groups:
+            if rank < len(group) and group[rank] not in out and len(out) < MAX_NTP_ADDRESSES:
+                out.append(group[rank])
     return out
 
 
@@ -220,7 +237,7 @@ def _parse_ntp6_list(value):
             address = ipaddress.ip_address(part)
         except ValueError:
             name = part.rstrip(".").lower()
-            (good if _HOSTNAME_RE.match(name) and not name.isdigit() else bad).append(name if _HOSTNAME_RE.match(name) else part)
+            (good if _is_host_name(name) else bad).append(name if _is_host_name(name) else part)
             continue
         (good if address.version == 6 else bad).append(str(address) if address.version == 6 else part)
     return good, bad

@@ -497,3 +497,36 @@ def test_control_socket_and_hooks_are_only_rendered_when_asked_for():
     v6 = cfg.render_dhcp6(data, "/x", control={"socket": "kea6-ctrl.sock"})["Dhcp6"]
     assert v6["control-sockets"] == [{"socket-type": "unix", "socket-name": "kea6-ctrl.sock"}]
     assert "hooks-libraries" not in v6
+
+
+@pytest.mark.parametrize("typo", ["999.1.1.1", "192.168.1", "10.0.0.256", "pool.ntp.123"])
+def test_a_mistyped_address_is_not_taken_for_a_host_name(typo):
+    for family in ("dhcp4", "dhcp6"):
+        data = cfg.default_settings()
+        data[family]["subnets"][0]["ntp_servers"] = typo
+        errors = cfg.validate(data)[1]
+        assert errors and "NTP server is invalid" in errors[0], (family, typo)
+
+
+def test_host_names_with_digits_are_still_accepted():
+    data = cfg.default_settings()
+    data["dhcp4"]["subnets"][0]["ntp_servers"] = "0.asia.pool.ntp.org, time1.example, ntp"
+    cleaned, errors = cfg.validate(data)
+    assert errors == [] and cleaned["dhcp4"]["subnets"][0]["ntp_servers"] == ["0.asia.pool.ntp.org", "time1.example", "ntp"]
+
+
+def test_the_number_of_ntp_addresses_sent_is_bounded_and_every_name_contributes():
+    data = cfg.default_settings()
+    names = [f"n{i}.test" for i in range(16)]
+    data["dhcp4"]["subnets"][0]["ntp_servers"] = names
+    cleaned, errors = cfg.validate(data)
+    assert errors == []
+    resolved = {n: [f"198.51.{i}.{j}" for j in range(1, 5)] for i, n in enumerate(names)}
+    sent = [o for o in cfg.render_dhcp4(cleaned, "/x", resolved)["Dhcp4"]["subnet4"][0]["option-data"]
+            if o["name"] == "ntp-servers"][0]["data"].split(", ")
+    assert len(sent) == cfg.MAX_NTP_ADDRESSES == 16
+    assert sent == [f"198.51.{i}.1" for i in range(16)]                # the first address of every name
+    # below the limit the order is the order of the entries, unchanged
+    few = cfg.render_dhcp4(cleaned, "/x", {"n0.test": ["198.51.0.1", "198.51.0.2"], "n1.test": ["198.51.1.1"]})
+    assert [o for o in few["Dhcp4"]["subnet4"][0]["option-data"] if o["name"] == "ntp-servers"][0]["data"] == \
+        "198.51.0.1, 198.51.0.2, 198.51.1.1"

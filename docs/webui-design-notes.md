@@ -60,10 +60,11 @@
 | Leases: filter, sort, reserve, delete | ✅ Done |
 | Log viewer in the Web UI (captures daemon stdout in a 3000-line ring buffer, shows the last 500 lines on opening and keeps 1500 in the page; still echoed to the Home Assistant log) | ✅ Done |
 | Settings export / import (import only loads the editor, it does not apply; v1 files are migrated automatically) | ✅ Done |
-| Applying settings reloads with SIGHUP (restart only when the interface changes, a daemon is not running, or DHCPv6 is toggled) | ✅ Done; DHCPv4 reload **verified against the real Kea 3.0.x on amd64 in CI** (DHCPv6 reload and aarch64 are not exercised) |
+| Applying settings reloads Kea (`config-reload` through the control socket, SIGHUP as the fallback; restart only when the interface changes, a daemon is not running, or DHCPv6 is toggled) | ✅ Done; DHCPv4 reload **verified against the real Kea 3.0.x on amd64 in CI** (DHCPv6 reload and aarch64 are not exercised) |
 | Interface and DHCPv6 switch editable in the Web UI | ✅ Done (the Home Assistant options are initial defaults) |
 | Image build (amd64 and aarch64), real-Kea configuration tests, container smoke test | ✅ Done in CI (GitHub Actions) |
-| Installation in a real Home Assistant (Supervisor, Ingress, `app_config` mount, real DHCP clients) | ⬜ Not verified |
+| Installation in a real Home Assistant (Supervisor, Ingress, `app_config` mount, real DHCP clients) | 🟡 The owner runs it as the DHCP server of their own network (about 160 reserved devices, version 2.4.0, since 2026-11-06). Nothing else has been checked systematically |
+| API for scripts and AI agents (`docs/agent-api.md`) | ✅ Done; exercised end to end in the CI smoke test. Not yet used against a real installation |
 
 ### Settings file schema
 - v1: one `pool_start`/`pool_end` per subnet, no `global` section.
@@ -80,13 +81,16 @@
   stopped (Kea's memfile convention: the last row per address wins, and lifetime 0 means deleted). CI proves that Kea accepts
   that row and starts normally afterwards, but not that Kea then treats the lease as deleted; that needs a full DHCP client
   exercise. The file state when Kea is stopped in the middle of lease file cleanup (LFC) has not been tested either.
-- **Real Home Assistant**: the Supervisor loading the app, the Ingress panel, the `app_config` mount and backups
-  are only covered by static rule checks, not by an installation.
-- The sample subnet `192.168.1.0/24` is active from the first start.
+- **Real Home Assistant**: the owner runs the app as their DHCP server (2.4.0, since 2026-11-06), which shows that the Supervisor
+  loads it, the Ingress panel works with the assumed source address and real clients are served. Nothing was checked
+  systematically there (backups and restore, the agent API, the paths added after 2.4.0).
+- (Resolved) The sample subnet `192.168.1.0/24` used to be served from the first start when the machine had an `eth0`, which
+  on a network that really is 192.168.1.0/24 meant a second DHCP server before anything was configured. Now an installation
+  without usable saved settings starts no daemon until the first Save & apply (`manager.awaiting_setup`).
 
 Resolved by CI: the image builds on Alpine 3.24 (amd64 and aarch64) with the package names `kea-dhcp4` and
 `kea-dhcp6`; the generated configuration (several pools, `pd-pools`, `ntp-servers`, `domain-search`, custom options)
-is accepted by the real Kea 3.0.3; SIGHUP reload works; the lease path problem described in section 4 was found and
+is accepted by the real Kea 3.0.3; reloading works (SIGHUP, and `config-reload` through the control channel); the lease path problem described in section 4 was found and
 fixed by the smoke test (`kea -t` does not open the lease database, so only a real start exposes it).
 
 ## 7. Dependency tracking (Renovate)

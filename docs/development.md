@@ -14,8 +14,8 @@ python scripts/check_supervisor_rules.py  # config.yaml vs. the live Home Assist
 
 Web UI settings are stored in `/config/kea/settings.json` inside the container (the app's config folder on the
 host). **Save & apply** validates the input, renders the Kea configuration, and checks it with `kea-dhcpX -t` (only
-for the daemons that are switched on). Only then is it written, and running daemons get `SIGHUP` so Kea reloads
-without interrupting service. A changed interface, a daemon that is not running, or one that started less than 2 s
+for the daemons that are switched on). Only then is it written, and running daemons are told to reload it (`config-reload`
+through Kea's control socket, or `SIGHUP` when that does not answer), so service is not interrupted. A changed interface, a daemon that is not running, or one that started less than 2 s
 ago is (re)started instead; switching DHCPv6 on or off only starts or stops `kea-dhcp6`. Because `kea -t` accepts
 some configurations Kea then cannot run, the manager watches the daemons for about 1.5 s afterwards; if one stopped
 or logged a failed reconfiguration, `settings.json`, the generated configs and the running daemons are restored and
@@ -29,7 +29,7 @@ the error is returned. A failure *before* the write leaves everything untouched.
 |---|---|
 | Unit tests | `pytest` on Python 3.13 and 3.14, including static checks of the app packaging |
 | Supervisor rules | `kea/config.yaml` against the **current** Supervisor source: valid `privileged` capabilities, non-deprecated `map` types and `arch` |
-| Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs, and a real start), and a smoke test of the running container (startup, SIGHUP reload, lease deletion, restart) |
+| Image | Builds the image, then inside it: the whole test suite with the **real Kea** (`kea-dhcp4 -t` / `kea-dhcp6 -t` on generated configs, a real start, the control channel against a running Kea), and a smoke test of the running container (a fresh install serves nothing, the first save starts Kea, reload through the control channel, a refused configuration, lease deletion without a restart, restart, the agent API from token to rollback) |
 | Image (aarch64) | Builds under QEMU and runs the real-Kea config tests. Not on pull requests, and not part of the `CI passed` check |
 
 The image job also guards the Kea version: Alpine decides which Kea is installed, and `ci/kea-series` holds the

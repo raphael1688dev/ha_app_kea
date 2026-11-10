@@ -24,7 +24,7 @@ API_PREFIX = "/v1"
 MAX_BODY = 1024 * 1024
 WRITE_LIMIT_PER_MINUTE = 30
 READ_LIMIT_PER_MINUTE = 300
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
+_CONTROL_CHARS = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]")
 MAX_HOSTNAME = 253
 MAX_LOG_LINE = 2000
 
@@ -171,7 +171,7 @@ def create_agent_app(manager, clock=time.time):
         code = result.get("code")
         if code == "not_found":
             raise ApiError(404, "not_found", errors[0])
-        if code in ("stale", "not_pending"):
+        if code in ("stale", "not_pending", "too_many"):
             raise ApiError(409, "stale_revision" if code == "stale" else "conflict", errors[0])
         if result.get("kind") == "kea":
             raise ApiError(409, "kea_refused", "Kea did not accept the change; nothing was changed", errors)
@@ -223,7 +223,8 @@ def create_agent_app(manager, clock=time.time):
     def ntp():
         return ok(manager.ntp_status())
 
-    @app.post(API_PREFIX + "/ntp/check", summary="Check NTP servers (nothing is saved)", dependencies=[require("read")])
+    # Not for read-only tokens: it makes this machine look up names and send NTP requests to hosts the caller chooses.
+    @app.post(API_PREFIX + "/ntp/check", summary="Check NTP servers (nothing is saved)", dependencies=[require("propose")])
     def ntp_check(body: NtpCheckBody):
         result = manager.check_ntp(body.servers, body.version)
         if not result["ok"]:

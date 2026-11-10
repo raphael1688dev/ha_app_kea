@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import seed_settings
 from manager import KeaManager
 from server import create_app
 
@@ -27,6 +28,7 @@ class FakeAgent:
 
 @pytest.fixture
 def parts(tmp_path, fake_kea):
+    seed_settings(tmp_path / "data")
     m = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
     m.settle_seconds, m.reload_grace = 0.4, 0
     agent = FakeAgent(m)
@@ -109,3 +111,20 @@ def test_the_state_changing_calls_need_the_json_content_type(parts):
                          ("POST", "/api/agent/proposals/x/approve")):
         r = client.request(method, path, content="x", headers={"content-type": "text/plain"})
         assert r.status_code == 415, path
+
+
+def test_a_save_from_a_page_that_missed_an_api_change_is_refused(parts):
+    """The Web UI used to overwrite whatever an agent had applied in the meantime, without a word."""
+    client, m, _ = parts
+    page_revision = client.get("/api/state").json()["revision"]
+    page_draft = client.get("/api/state").json()["settings"]
+    assert m.apply_operations(ADD_PRINTER, source="api:agent")["ok"]                 # meanwhile, through the API
+    page_draft["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    r = client.put(f"/api/settings?revision={page_revision}", json=page_draft)
+    assert r.status_code == 409 and "Discard changes" in r.json()["errors"][0]
+    assert m.settings["dhcp4"]["subnets"][0]["reservations"][0]["hostname"] == "printer"   # the agent's change survived
+    assert m.settings["dhcp4"]["subnets"][0]["lease_time"] == 86400
+    fresh = client.get("/api/state").json()
+    fresh["settings"]["dhcp4"]["subnets"][0]["lease_time"] = 7200
+    assert client.put(f"/api/settings?revision={fresh['revision']}", json=fresh["settings"]).status_code == 200
+    assert len(m.settings["dhcp4"]["subnets"][0]["reservations"]) == 1 and m.settings["dhcp4"]["subnets"][0]["lease_time"] == 7200

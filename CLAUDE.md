@@ -15,11 +15,11 @@ and CI runs afterwards.
 | Path | What |
 |---|---|
 | `kea/` | The app itself: `config.yaml`, `Dockerfile`, `run.sh`, `requirements.txt` (runtime pins), `CHANGELOG.md`, `DOCS.md`, `translations/` |
-| `kea/app/` | Backend (`settings.py` validate + render Kea configs, `manager.py` daemons/reload/logs/NTP refresh, `leases.py`, `server.py`, `ntpcheck.py` SNTP probe + name refresh, `migrate.py` old DHCP server app import) and `static/index.html` (the whole frontend) |
+| `kea/app/` | Backend (`settings.py` validate + render Kea configs, `manager.py` daemons/reload/logs/NTP refresh, `leases.py`, `server.py` Ingress Web UI, `kea_control.py` Kea control socket client, `ntpcheck.py` SNTP probe + name refresh, `migrate.py` old DHCP server app import, `agent_api.py` + `apiauth.py` + `history.py` + `ops.py` + `proposals.py` the API for scripts and agents) and `static/index.html` (the whole frontend) |
 | `tests/` | pytest. Fake Kea scripts for most tests; `test_real_kea.py` needs the real Kea |
 | `ci/`, `scripts/` | CI smoke test and approved Kea series; release tool, Supervisor-rule checker |
 | `.github/workflows/` | `ci.yml` (tests, image, real Kea, smoke test), `release.yml` (tag -> GitHub Release) |
-| `docs/` | `development.md` (CI, Renovate, releasing), `webui-design-notes.md` (decisions and open risks) |
+| `docs/` | `development.md` (CI, Renovate, releasing), `webui-design-notes.md` (decisions and open risks), `agent-api.md` (the API for scripts and agents) |
 
 ## Commands
 
@@ -98,14 +98,20 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
   `proposals.py`, small named operations in `ops.py`. A *revision* is a content hash of the settings. Agents get read by default;
   changes are proposed and a person approves them in the Web UI; interface, DHCPv6 switch, subnets and import are deliberately not
   available as operations. Lease hostnames and log lines are marked untrusted (prompt-injection risk) and stripped of control characters.
+- An installation without usable saved settings (`settings.json` missing or unreadable) starts **no daemon** until the first Save & apply
+  (`manager.awaiting_setup`): the sample subnet 192.168.1.0/24 must never be served by itself. Tests that need running daemons seed a
+  settings file first (`conftest.seed_settings`); the smoke test begins with the fresh-install case.
+- PyYAML reads YAML 1.1: an unquoted `10:20:30:40:50:11` is a base-60 number, `yes` is True, `0123` is octal. Home Assistant writes
+  such values unquoted, so `migrate.parse_text` uses its own SafeLoader subclass that keeps them as text. Do not swap it for `yaml.safe_load`.
+- The Web UI sends the revision its editor was filled from (`PUT /api/settings?revision=`); a save over a change it has not seen is
+  refused (409). Anything that replaces the draft in `index.html` must keep `state.baseRevision` in step.
 - Web UI text from the network (lease hostnames) is untrusted: build DOM with `textContent`, never `innerHTML`.
 
 ## Not verified yet
 
-The owner installed the app in their real Home Assistant on 2026-11-06 and was starting to migrate from the old DHCP server
-app; how that went is not known. Until it is, the Supervisor loading it, the Ingress panel, the `app_config` mount and real
-DHCP clients are only covered by static checks and CI. Deleting a lease through the control channel (`lease4-del`) is proven
-with the real Kea 3.0.3 in CI; only the fallback of appending a `valid_lifetime=0` row to the lease file is unproven (Kea accepts
-the row, but nothing shows that it then treats the lease as deleted). IPv6 lease deletion (`lease6-del`, IA_NA then IA_PD) has only
-been tested against a fake socket.
-See `docs/webui-design-notes.md` section 6.
+The owner runs the app as the DHCP server of their own Home Assistant (2.4.0, since 2026-11-06, about 160 reserved devices):
+the Supervisor loads it, Ingress works and real clients are served. That is one installation and nothing was checked
+systematically, so backups/restore, the agent API (2.5.0) and everything added later are only covered by unit tests and CI.
+Deleting a lease through the control channel (`lease4-del`) is proven with the real Kea 3.0.3 in CI; only the fallback of
+appending a `valid_lifetime=0` row to the lease file is unproven (Kea accepts the row, but nothing shows that it then treats
+the lease as deleted). IPv6 lease deletion (`lease6-del`, IA_NA then IA_PD) has only been tested against a fake socket.

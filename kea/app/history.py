@@ -51,7 +51,7 @@ class History:
                 return None
             os.makedirs(self.dir, exist_ok=True)
             now = self.clock()
-            record = {"revision": revision, "time": now, "source": str(source)[:64], "note": str(note or "")[:500]}
+            record = {"revision": revision, "time": now, "source": str(source)[:120], "note": str(note or "")[:500]}
             last = int(files[-1].split("-", 1)[0]) if files and files[-1].split("-", 1)[0].isdigit() else 0
             name = f"{last + 1:010d}-{revision}.json"          # a counter, not the clock: two saves can share a millisecond
             _write_json(os.path.join(self.dir, name), dict(record, settings=settings))

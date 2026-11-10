@@ -46,8 +46,13 @@ class FakeManager:
                 "dhcp6": read_leases(self.lease_path("dhcp6")) if "dhcp6" in self.enabled else []}
     def status(self): return {"daemons": {}, "last_error": None}
 
-    def apply(self, raw):
+    def revision(self): return "rev-1"
+
+    def apply(self, raw, expected_revision=None):
         self.applied = raw
+        self.expected_revision = expected_revision
+        if expected_revision not in (None, "rev-1"):
+            return {"ok": False, "stale": True, "revision": "rev-1", "errors": ["stale"]}
         cleaned, errors = cfg.validate(raw)
         return ({"ok": False, "errors": errors} if errors
                 else {"ok": True, "settings": cleaned, "action": "reloaded", "status": self.status()})
@@ -192,6 +197,16 @@ def test_import_preview(client, manager):
     r = client.post("/api/import", json=bad)
     assert r.status_code == 400 and r.json()["errors"]
     assert manager.applied is None   # preview never applies
+
+
+def test_saving_says_which_version_the_editor_was_based_on(client, manager):
+    assert client.get("/api/state").json()["revision"] == "rev-1"
+    assert client.put("/api/settings?revision=rev-1", json=cfg.default_settings()).status_code == 200
+    assert manager.expected_revision == "rev-1"
+    stale = client.put("/api/settings?revision=older", json=cfg.default_settings())
+    assert stale.status_code == 409 and "changed somewhere else" in stale.json()["errors"][0]
+    assert client.put("/api/settings", json=cfg.default_settings()).status_code == 200      # old pages send no revision
+    assert manager.expected_revision is None
 
 
 def test_import_from_the_old_app_and_host_addresses(client, manager):

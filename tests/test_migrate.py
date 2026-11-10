@@ -153,3 +153,34 @@ def test_a_large_list_is_reported_compactly():
     result = run(OLD + hosts)
     assert len(result["report"]) <= migrate.MAX_REPORT_LINES + 1 and result["counts"]["error"] == 400
     assert "more" in result["report"][-1]["text"]
+
+
+def test_unquoted_values_stay_text_the_way_home_assistant_writes_them():
+    """PyYAML alone reads 10:20:30:40:50:11 as a base-60 number, `yes` as True, 0123 as octal 83 (YAML 1.1)."""
+    parsed = migrate.parse_text("""
+default_lease: 3600
+flag: true
+nothing: null
+hosts:
+  - {name: plug, mac: 10:20:30:40:50:11, ip: 192.0.2.10}
+  - {name: yes, mac: 12:34:56:07:08:09, ip: 192.0.2.11}
+  - {name: 0123, mac: "aa:bb:cc:dd:ee:03", ip: 192.0.2.12}
+  - {name: 2024-01-15, mac: aa:bb:cc:dd:ee:04, ip: 192.0.2.13}
+  - {name: 1e3, mac: aa:bb:cc:dd:ee:05, ip: 192.0.2.14}
+""")
+    assert parsed["default_lease"] == 3600 and parsed["flag"] is True and parsed["nothing"] is None
+    assert [(h["name"], h["mac"]) for h in parsed["hosts"]] == [
+        ("plug", "10:20:30:40:50:11"), ("yes", "12:34:56:07:08:09"), ("0123", "aa:bb:cc:dd:ee:03"),
+        ("2024-01-15", "aa:bb:cc:dd:ee:04"), ("1e3", "aa:bb:cc:dd:ee:05")]
+
+
+def test_a_mac_address_made_of_decimal_digits_is_carried_over():
+    result = run(OLD + "  - {name: plug, mac: 10:20:30:40:50:11, ip: 192.0.2.20}\n")
+    assert result["complete"], result["report"]
+    assert result["settings"]["dhcp4"]["subnets"][0]["reservations"][-1] == {
+        "hw_address": "10:20:30:40:50:11", "ip_address": "192.0.2.20", "hostname": "plug"}
+
+
+def test_the_loader_is_still_a_safe_one():
+    with pytest.raises(ValueError):
+        migrate.parse_text("a: !!python/object/apply:os.system ['true']")

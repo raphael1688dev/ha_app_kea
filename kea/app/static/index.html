@@ -110,7 +110,10 @@ const TABS = [["dhcp4", "IPv4"], ["dhcp6", "IPv6"], ["leases", "Leases"], ["logs
 const LOG_SOURCES = [["", "All"], ["dhcp4", "Kea DHCPv4"], ["dhcp6", "Kea DHCPv6"], ["addon", "App"]];
 const MAX_LOG_LINES = 1500;
 
-let state = { status: null, saved: null, draft: null, leases: null, interfaces: null, ntp: {} };
+// savedRevision is the version of the saved settings on the server; baseRevision is the version the editor (draft)
+// was filled from. Saving sends baseRevision, so a change made elsewhere meanwhile is not silently overwritten.
+let state = { status: null, saved: null, draft: null, leases: null, interfaces: null, ntp: {},
+              savedRevision: null, baseRevision: null };
 let agentState = null;                            // /api/agent: API settings, tokens, proposals, saved versions
 let newSecret = null;                             // a token's secret, shown once right after it was created
 const ntpCheck = {};                              // last "Check NTP servers" result per subnet editor
@@ -196,8 +199,17 @@ function toDraft(settings) {
   }
   return d;
 }
-function markDirty() { dirty = true; document.getElementById("savebar").hidden = false; }
-function clearDirty() { dirty = false; document.getElementById("savebar").hidden = true; }
+// The save bar shows when there is something to save, and always on a fresh install: there the first Save & apply is
+// what starts Kea, even if nothing in the editor had to be changed.
+function updateSaveBar() {
+  const waiting = !!(state.status && state.status.awaiting_setup);
+  document.getElementById("savebar").hidden = !(dirty || waiting);
+  document.getElementById("savemsg").textContent = dirty ? "You have unsaved changes"
+    : "Nothing is served yet: check the settings, then click Save & apply to start Kea";
+  document.getElementById("discard").hidden = !dirty;
+}
+function markDirty() { dirty = true; updateSaveBar(); }
+function clearDirty() { dirty = false; updateSaveBar(); }
 
 // ------------------------------------------------------------- formatting
 function fmtDuration(sec) {
@@ -214,6 +226,7 @@ function renderStatus() {
   bar.replaceChildren();
   const st = state.status;
   if (!st) return;
+  updateSaveBar();
   bar.append(h("span", { class: "muted" }, "Interface:"), h("b", {}, st.interface));
   for (const [key, label] of [["dhcp4", "DHCPv4"], ["dhcp6", "DHCPv6"]]) {
     const d = st.daemons[key];
@@ -236,9 +249,10 @@ function renderStatus() {
       "Update Home Assistant (and its Supervisor) to 2026.7.0 or newer, then restart the app."));
   if (st.awaiting_setup)
     kerr.append(h("div", { class: "banner warn" },
-      "Kea is not running yet. The interface option was left at its default, which this machine does not have, so " +
-      st.interface + " (the interface of the default route) is shown. Nothing is served until you check the settings " +
-      "(interface, subnet) and click Save & apply for the first time."));
+      "Kea is not running yet, and nothing is served, until you click Save & apply for the first time. Check the settings " +
+      "first: the network interface (Settings tab) and the subnet (IPv4 tab), which is only an example." +
+      (st.auto_interface ? " The default interface eth0 does not exist on this machine, so " + st.auto_interface +
+        " (the interface of the default route) was filled in." : "")));
   if (st.last_error)
     kerr.append(h("div", { class: "banner err" }, "Kea problem\n" + st.last_error));
 }
@@ -690,7 +704,7 @@ function renderAgentConfig() {
     h("div", { class: "fields" },
       h("div", {}, h("label", {}, "New token name"), textInput(tokenForm, "name", { placeholder: "home-agent" })),
       h("div", {}, h("label", {}, "Allow"),
-        h("div", {}, h("label", { class: "check" }, h("input", { type: "checkbox", checked: true, disabled: true }), "read: " + SCOPE_HELP.read),
+        h("div", {}, h("label", { class: "check" }, h("input", { type: "checkbox", checked: true, disabled: true, "data-locked": "1" }), "read: " + SCOPE_HELP.read),
           ...["propose", "apply", "lease-delete", "restart"].map((sc) => h("label", { class: "check", title: SCOPE_HELP[sc] },
             h("input", { type: "checkbox", onchange: (e) => { tokenForm.scopes[sc] = e.target.checked; } }), sc + ": " + SCOPE_HELP[sc]))))),
     h("p", {}, h("button", { onclick: async () => {
@@ -734,7 +748,7 @@ function renderAgentPending() {
     recent.length ? h("div", { class: "muted small" }, "Recently decided: " + recent.map((p) => p.status + " (" + p.token + ", " + when(p.decided) + ")").join("; ")) : null),
     h("div", { class: "card" },
       h("h3", {}, "Settings versions"),
-      h("p", { class: "muted" }, "Every applied change is saved first. Roll back to go to an earlier version."),
+      h("p", { class: "muted" }, "Every applied change is saved as a version (the last 50 are kept). Roll back to go to an earlier one."),
       tableOf(["Time", "By", "Note", ""], agentState.history.map((v) => h("tr", {},
         h("td", { class: "nowrap" }, when(v.time)), h("td", {}, v.source), h("td", {}, v.note || ""),
         h("td", {}, v.revision === agentState.revision ? h("span", { class: "muted small" }, "current") :
@@ -831,7 +845,8 @@ async function loadAll() {
   const data = await api("state");
   state.status = data.status;
   state.saved = data.settings;
-  if (!dirty) state.draft = toDraft(data.settings);
+  state.savedRevision = data.revision;
+  if (!dirty) { state.draft = toDraft(data.settings); state.baseRevision = data.revision; }
   renderStatus(); renderView();
 }
 async function loadLeases() {
@@ -849,6 +864,7 @@ async function setBusy(on) {
 
 function applyMessage(res) {
   const c = res.changes || {};
+  if ((c.started || []).includes("dhcp4")) return "Applied. Kea was started.";
   if (res.action === "restarted") return "Applied. Kea was restarted.";
   const notes = [];
   if ((c.started || []).includes("dhcp6")) notes.push("DHCPv6 was started.");
@@ -860,8 +876,9 @@ document.getElementById("save").addEventListener("click", async () => {
   showErrors(null);
   await setBusy(true);
   try {
-    const res = await sendJSON("PUT", "settings", state.draft);
+    const res = await sendJSON("PUT", "settings" + (state.baseRevision ? "?revision=" + encodeURIComponent(state.baseRevision) : ""), state.draft);
     state.saved = res.settings; state.draft = toDraft(res.settings); state.status = res.status;
+    state.savedRevision = state.baseRevision = res.revision;
     clearDirty();
     await loadNtp();
     toast(applyMessage(res));
@@ -873,7 +890,8 @@ document.getElementById("save").addEventListener("click", async () => {
 
 document.getElementById("discard").addEventListener("click", () => {
   if (!confirm("Discard all unsaved changes?")) return;
-  state.draft = toDraft(state.saved); clearDirty(); showErrors(null); renderView();
+  clearDirty(); showErrors(null);
+  loadAll().catch((e) => showErrors(e.errors));       // from the server, not from memory: it may have changed meanwhile
 });
 
 async function onRestart() {

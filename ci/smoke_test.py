@@ -232,7 +232,26 @@ def agent_api_flow():
 
 
 def run():
-    step("waiting for Kea DHCPv4 to start")
+    step("a fresh install serves nothing until the first Save & apply")
+    first = wait_for(lambda: call("GET", "/api/state")[1], "the Web UI to answer", timeout=90)
+    st = first["status"]
+    if not st.get("awaiting_setup"):
+        raise Failure(f"a fresh install should wait for the first Save & apply: {st}")
+    time.sleep(3)
+    if daemon()["running"] or any(e["source"] == "dhcp4" for e in log_entries()):
+        raise Failure("kea-dhcp4 was started on a fresh install, before anything was saved")
+    code, body = call("POST", "/api/restart")
+    if code == 200:
+        raise Failure("Restart Kea started Kea although nothing has been saved yet")
+    print(f"    waiting for setup, Kea not started; Restart is refused: {(body or {}).get('errors', ['?'])[0][:80]}")
+
+    step("the first Save & apply starts Kea DHCPv4")
+    result = apply_settings(first["settings"])
+    if result["action"] != "restarted":
+        raise Failure(f"the first save should start Kea, got action {result['action']!r}")
+    if status().get("awaiting_setup"):
+        raise Failure("still waiting for setup after the first save")
+
     def started():
         st = status()
         if st["daemons"]["dhcp4"]["running"]:

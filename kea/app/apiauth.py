@@ -56,7 +56,9 @@ class ApiConfig:
             data["port"] = port if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535 else DEFAULT_PORT
             cidrs = [c for c in raw.get("allowed_cidrs", []) if isinstance(c, str) and self._cidr(c)]
             data["allowed_cidrs"] = cidrs or list(DEFAULT_CIDRS)
-            data["tokens"] = [t for t in raw.get("tokens", []) if isinstance(t, dict) and t.get("id") and t.get("hash")
+            data["tokens"] = [dict(t, last_used=t.get("last_used") if isinstance(t.get("last_used"), int) else None)
+                              for t in raw.get("tokens", [])
+                              if isinstance(t, dict) and isinstance(t.get("id"), str) and isinstance(t.get("hash"), str)
                               and isinstance(t.get("scopes"), list)]
 
     def _save(self):

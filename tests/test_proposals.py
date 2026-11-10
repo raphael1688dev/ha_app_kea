@@ -1,6 +1,6 @@
 import pytest
 
-from proposals import EXPIRE_SECONDS, MAX_PROPOSALS, Proposals, ProposalError
+from proposals import EXPIRE_SECONDS, MAX_PENDING, MAX_PROPOSALS, Proposals, ProposalError
 
 
 @pytest.fixture
@@ -68,3 +68,12 @@ def test_filtering_by_status_and_newest_first(box):
     box.decide(a["id"], "rejected")
     assert [p["note"] for p in box.list()] == ["b", "a"] and [p["note"] for p in box.list("pending")] == ["b"]
     assert [p["note"] for p in box.list("rejected")] == ["a"]
+
+
+def test_undecided_proposals_are_limited_and_deciding_one_makes_room(box):
+    made = [make(box, note=f"n{i}") for i in range(MAX_PENDING)]
+    with pytest.raises(ProposalError) as full:
+        make(box)
+    assert full.value.code == "too_many" and len(box.list("pending")) == MAX_PENDING
+    box.decide(made[0]["id"], "rejected")
+    assert make(box)["status"] == "pending"

@@ -7,6 +7,7 @@ import pytest
 
 import leases as lease_files
 import settings as cfg
+from conftest import seed_settings
 from manager import KeaManager
 
 
@@ -25,6 +26,7 @@ def log_text(mgr, **kw):
 
 @pytest.fixture
 def mgr(tmp_path, fake_kea):
+    seed_settings(tmp_path / "data")              # an installation that has been set up; fresh installs are tested below
     m = KeaManager({"interface": "eth0"}, str(tmp_path / "etc"), str(tmp_path / "data"))
     m.settle_seconds = 0.4        # production waits 1.5 s after an apply
     m.reload_grace = 0            # production does not signal a daemon that started less than 2 s ago
@@ -36,7 +38,7 @@ def pid(m, name="dhcp4"):
     return m.status()["daemons"][name]["pid"]
 
 
-def test_startup_creates_default_settings_and_runs_dhcp4_only(mgr):
+def test_startup_with_saved_settings_runs_dhcp4_only(mgr):
     mgr.startup()
     st = mgr.status()
     assert st["interface"] == "eth0" and st["enable_dhcp6"] is False
@@ -48,9 +50,13 @@ def test_startup_creates_default_settings_and_runs_dhcp4_only(mgr):
 
 
 def test_dhcp6_started_when_enabled_in_options(tmp_path, fake_kea):
+    """The options seed the first settings; the daemons start with the first Save & apply."""
     m = KeaManager({"interface": "eth0", "enable_dhcp6": True}, str(tmp_path / "e"), str(tmp_path / "d"))
+    m.settle_seconds = 0.4
     try:
         m.startup()
+        assert m.status()["awaiting_setup"] and m.settings["global"]["enable_dhcp6"] is True
+        assert m.apply(m.settings)["ok"]
         assert m.status()["daemons"]["dhcp6"]["running"] is True
     finally:
         m.shutdown()
@@ -139,16 +145,18 @@ def test_apply_invalid_changes_nothing(mgr, good):
     mgr.startup()
     old_pid = pid(mgr)
     good["dhcp4"]["subnets"][0]["pools"][0]["start"] = "bogus"
+    saved = open(mgr.settings_path).read()
     result = mgr.apply(good)
     assert result["ok"] is False and result["errors"]
     assert pid(mgr) == old_pid
-    assert not os.path.exists(mgr.settings_path)
+    assert open(mgr.settings_path).read() == saved
 
 
 def test_kea_rejection_keeps_old_config_and_cleans_staging(mgr, good):
     mgr.startup()
     conf_path = os.path.join(mgr.conf_dir, "kea-dhcp4.conf")
     before = open(conf_path).read()
+    saved = open(mgr.settings_path).read()
     old_pid = pid(mgr)
     # make the fake `kea -t` fail by injecting a marker into the rendered config
     orig = cfg.render_dhcp4
@@ -161,7 +169,7 @@ def test_kea_rejection_keeps_old_config_and_cleans_staging(mgr, good):
     assert open(conf_path).read() == before
     assert not os.path.exists(conf_path + ".new")
     assert pid(mgr) == old_pid
-    assert not os.path.exists(mgr.settings_path)
+    assert open(mgr.settings_path).read() == saved
 
 
 def test_restart_replaces_processes(mgr):
@@ -321,21 +329,23 @@ def test_apply_is_rolled_back_when_the_daemon_dies(mgr, good):
     assert mgr.status()["last_error"] is None
 
 
-def test_first_apply_that_fails_leaves_no_settings_file(mgr, good):
+def test_an_apply_that_fails_leaves_the_saved_settings_as_they_were(mgr, good):
     mgr.startup()
+    saved = open(mgr.settings_path).read()
     good["global"]["interface"] = "nonexistent0"
     orig = patched_render("DIE_ME")
     try:
         assert mgr.apply(good)["ok"] is False
     finally:
         cfg.render_dhcp4 = orig
-    assert not os.path.exists(mgr.settings_path)                            # nothing persisted
+    assert open(mgr.settings_path).read() == saved                          # nothing persisted
     assert wait_for(lambda: mgr.status()["daemons"]["dhcp4"]["running"])
 
 
 def test_apply_is_rolled_back_when_a_reload_is_rejected(mgr, good):
     mgr.startup()
     old_pid = pid(mgr)
+    saved = open(mgr.settings_path).read()
     orig = patched_render("RELOAD_FAIL")
     try:
         result = mgr.apply(good)
@@ -343,7 +353,7 @@ def test_apply_is_rolled_back_when_a_reload_is_rejected(mgr, good):
         cfg.render_dhcp4 = orig
     assert result["ok"] is False and "reported a problem" in result["errors"][0]
     assert "RECONFIGURATION_FAIL" in result["errors"][0]
-    assert not os.path.exists(mgr.settings_path)
+    assert open(mgr.settings_path).read() == saved
     assert wait_for(lambda: mgr.status()["daemons"]["dhcp4"]["running"]) and pid(mgr) != old_pid
 
 
@@ -404,7 +414,12 @@ def test_a_malformed_settings_file_does_not_crash_start_up(mgr):
         if text.startswith('{"dhcp4"'):
             assert loaded["dhcp4"]["subnets"] == [], text
     mgr.startup()                                                            # and the whole start-up survives
-    assert mgr.status()["daemons"]["dhcp4"]["running"] is True
+    # the last file ("null") cannot be used at all: that is like having no settings, so nothing is served
+    assert mgr.status()["awaiting_setup"] and not mgr.status()["daemons"]["dhcp4"]["running"]
+    open(mgr.settings_path, "w").write('{"dhcp4": "x"}')                     # usable, but without subnets
+    mgr.startup()
+    assert not mgr.status()["awaiting_setup"] and mgr.status()["daemons"]["dhcp4"]["running"] is True
+    assert mgr.settings["dhcp4"]["subnets"] == []
 
 
 def test_malformed_settings_in_a_request_are_errors_not_crashes(mgr, good):
@@ -667,7 +682,8 @@ def test_a_missing_default_interface_becomes_the_default_route_one_and_nothing_i
         st = m.status()
         assert st["interface"] == "enp1s0" and st["awaiting_setup"] and st["last_error"] is None
         assert not st["daemons"]["dhcp4"]["running"]
-        assert "not started until you click Save & apply" in log_text(m)
+        assert "Kea is not started until" in log_text(m) and "using enp1s0" in log_text(m)
+        assert st["auto_interface"] == "enp1s0"
         refused = m.restart()
         assert not refused["ok"] and "not been set up" in refused["errors"][0]
         assert not m.status()["daemons"]["dhcp4"]["running"]
@@ -727,7 +743,9 @@ def test_the_interface_is_left_alone_when_there_is_no_good_reason_to_change_it(t
     assert m.auto_interface is None and m.default_global["interface"] == options["interface"], why
     m.startup()
     try:
-        assert not m.status()["awaiting_setup"] and m.status()["daemons"]["dhcp4"]["running"], why
+        st = m.status()
+        assert st["interface"] == options["interface"] and st["auto_interface"] is None, why
+        assert st["awaiting_setup"] and not st["daemons"]["dhcp4"]["running"], "a fresh install serves nothing yet"
     finally:
         m.shutdown()
 
@@ -754,6 +772,7 @@ from fake_control import FakeControl  # noqa: E402
 def controlled(tmp_path, fake_kea):
     """A manager that uses the control channel, with a fake daemon behind kea4-ctrl.sock (and the fake processes)."""
     fakes = []
+    seed_settings(tmp_path / "data", enable_dhcp6=True)
     m = KeaManager({"interface": "eth0", "enable_dhcp6": True}, str(tmp_path / "etc"), str(tmp_path / "data"))
     m.settle_seconds, m.reload_grace = 0.4, 0
     m.control_api = True
@@ -1042,3 +1061,39 @@ def test_health_summary(mgr):
     h = mgr.health()
     assert h["revision"] == mgr.revision() and h["daemons"]["dhcp4"]["running"] and h["version"]
     assert set(h) >= {"interface", "awaiting_setup", "control_api", "last_error"}
+
+
+# ------------------------------------------------------------------ a fresh install serves nothing until it is set up
+def test_a_fresh_install_with_eth0_does_not_serve_the_sample_subnet(tmp_path, fake_kea):
+    """It used to start Kea at once with 192.168.1.0/24 on eth0: a second DHCP server on such a network before the
+    owner had configured anything."""
+    m = new_manager(tmp_path)
+    m.startup()
+    try:
+        st = m.status()
+        assert st["awaiting_setup"] and st["auto_interface"] is None and st["last_error"] is None
+        assert not st["daemons"]["dhcp4"]["running"] and not os.path.exists(m._conf_path("dhcp4"))
+        assert "Kea is not started until" in log_text(m)
+        assert not m.restart()["ok"]
+        assert m.apply(m.settings)["ok"]                         # the first Save & apply, even with nothing edited
+        assert m.status()["daemons"]["dhcp4"]["running"] and not m.status()["awaiting_setup"]
+    finally:
+        m.shutdown()
+    again = new_manager(tmp_path)                                # and from then on it starts by itself
+    again.startup()
+    try:
+        assert not again.status()["awaiting_setup"] and again.status()["daemons"]["dhcp4"]["running"]
+    finally:
+        again.shutdown()
+
+
+def test_an_unreadable_settings_file_is_treated_like_a_fresh_install(tmp_path, fake_kea):
+    os.makedirs(tmp_path / "data")
+    (tmp_path / "data" / "settings.json").write_text("{ not json")
+    m = new_manager(tmp_path)
+    m.startup()
+    try:
+        assert m.status()["awaiting_setup"] and not m.status()["daemons"]["dhcp4"]["running"]
+        assert "failed to read settings.json" in log_text(m)
+    finally:
+        m.shutdown()

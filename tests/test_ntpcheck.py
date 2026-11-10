@@ -209,3 +209,33 @@ def test_refresh_does_not_give_one_address_to_two_names():
     state, _ = ntpcheck.refresh(["a.test", "b.test"], None, probe=probe, resolver=resolver_for(
         {"a.test": ["198.51.100.1"], "b.test": ["198.51.100.1", "198.51.100.2"]}))
     assert state["a.test"]["addresses"] == ["198.51.100.1"] and state["b.test"]["addresses"] == ["198.51.100.2"]
+
+
+def test_a_closed_port_is_reported_at_once_not_after_the_timeout():
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()                                               # nothing listens there now
+    started = time.time()
+    result = ntpcheck.query("127.0.0.1", port=port, timeout=3, retries=0)
+    assert not result["ok"] and time.time() - started < 2
+    assert "network error" in result["reason"] or result["reason"] == "no answer"
+
+
+def test_a_packet_from_another_host_is_not_taken_for_the_answer(servers):
+    """The socket is connected to the server we asked, so a stray packet to our port never reaches the check."""
+    silent = servers(mode="silent")
+    result = ntpcheck.query("127.0.0.1", port=silent.port, timeout=0.4, retries=0)
+    assert not result["ok"] and result["reason"] == "no answer"
+
+
+def test_names_are_looked_up_side_by_side():
+    def slow_resolver(name, port, family, kind):
+        time.sleep(0.4)
+        return [(family, kind, 17, "", (f"198.51.100.{name[1]}", 0))]
+    started = time.time()
+    report = ntpcheck.check_servers([f"n{i}.test" for i in range(1, 6)], resolver=slow_resolver,
+                                    probe=fake_probe({f"198.51.100.{i}": good() for i in range(1, 6)}))
+    assert time.time() - started < 1.5                           # five lookups of 0.4 s one after the other take 2 s
+    assert len(ntpcheck.usable_addresses(report)) == 5
+    assert [s["server"] for s in report["servers"]] == [f"n{i}.test" for i in range(1, 6)]

@@ -214,6 +214,7 @@ def describe_changes(old, new):
             out.append(f"{family}: subnet {_subnet_label(old_subnets[sid])} removed")
         for sid in new_subnets.keys() - old_subnets.keys():
             out.append(f"{family}: subnet {_subnet_label(new_subnets[sid])} added")
+            out += _describe_subnet(family, {}, new_subnets[sid])       # with everything in it
         for sid in sorted(old_subnets.keys() & new_subnets.keys(), key=str):
             out += _describe_subnet(family, old_subnets[sid], new_subnets[sid])
     return out
@@ -222,17 +223,26 @@ def describe_changes(old, new):
 def _describe_subnet(family, old, new):
     where = f"{family} {_subnet_label(new)}"
     out = []
-    for key in sorted((set(old) | set(new)) - {"id", "pools", "reservations", "custom_options", "pd_pools"}):
-        if old.get(key) != new.get(key):
+    for key in sorted((set(old) | set(new)) - {"id", "subnet", "pools", "reservations", "custom_options", "pd_pools"}):
+        if old.get(key) != new.get(key) and (old or new.get(key) not in (None, "", [])):
             out.append(f"{where}: {key} {_brief(old.get(key))} -> {_brief(new.get(key))}")
     old_pools = {(p["start"], p["end"]) for p in old.get("pools", [])}
     new_pools = {(p["start"], p["end"]) for p in new.get("pools", [])}
     out += [f"{where}: pool {a} - {b} removed" for a, b in sorted(old_pools - new_pools)]
     out += [f"{where}: pool {a} - {b} added" for a, b in sorted(new_pools - old_pools)]
-    if old.get("custom_options", []) != new.get("custom_options", []):
-        out.append(f"{where}: custom options changed")
-    if old.get("pd_pools", []) != new.get("pd_pools", []):
-        out.append(f"{where}: prefix delegation pools changed")
+    old_options = {o["name"]: o["data"] for o in old.get("custom_options", [])}
+    new_options = {o["name"]: o["data"] for o in new.get("custom_options", [])}
+    for name in sorted(old_options.keys() - new_options.keys()):
+        out.append(f"{where}: custom option {name} removed (was {old_options[name]})")
+    for name in sorted(new_options.keys() - old_options.keys()):
+        out.append(f"{where}: custom option {name} added: {new_options[name]}")
+    for name in sorted(old_options.keys() & new_options.keys()):
+        if old_options[name] != new_options[name]:
+            out.append(f"{where}: custom option {name}: {old_options[name]} -> {new_options[name]}")
+    old_pd = {(p["prefix"], p["prefix_len"], p["delegated_len"]) for p in old.get("pd_pools", [])}
+    new_pd = {(p["prefix"], p["prefix_len"], p["delegated_len"]) for p in new.get("pd_pools", [])}
+    out += [f"{where}: prefix delegation pool {a}/{b} (delegating /{c}) removed" for a, b, c in sorted(old_pd - new_pd, key=str)]
+    out += [f"{where}: prefix delegation pool {a}/{b} (delegating /{c}) added" for a, b, c in sorted(new_pd - old_pd, key=str)]
     key = _ID_KEY[family]
     old_res = {r.get(key): r for r in old.get("reservations", [])}
     new_res = {r.get(key): r for r in new.get("reservations", [])}
