@@ -109,9 +109,10 @@ checked in GitHub CI (`gh run watch`, `gh run view --log-failed`).
 
 ## Not verified yet
 
-The owner runs the app as the DHCP server of their own Home Assistant (2.4.0, since 2026-11-06, about 160 reserved devices):
-the Supervisor loads it, Ingress works and real clients are served. That is one installation and nothing was checked
-systematically, so backups/restore, the agent API (2.5.0) and everything added later are only covered by unit tests and CI.
+The owner runs the app as the DHCP server of their own Home Assistant (since 2026-11-06, about 160 reserved devices):
+the Supervisor loads it, Ingress works, real clients are served and the agent API answers on their network. That is one
+installation and nothing was checked systematically, so backups/restore, the agent API's write paths (proposals, apply,
+rollback) and anything not used there are only covered by unit tests and CI.
 Deleting a lease through the control channel (`lease4-del`) is proven with the real Kea 3.0.3 in CI; only the fallback of
 appending a `valid_lifetime=0` row to the lease file is unproven (Kea accepts the row, but nothing shows that it then treats
 the lease as deleted). IPv6 lease deletion (`lease6-del`, IA_NA then IA_PD) has only been tested against a fake socket.
