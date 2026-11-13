@@ -4,11 +4,11 @@
 #
 # pydantic-core is deliberately NOT listed: pydantic pins it to one exact version, so pip always picks
 # the matching one. Pinning it here as well would let Renovate bump it alone and break the resolver.
-annotated-doc==0.0.5
+annotated-doc==0.0.6
 annotated-types==0.8.0
 anyio==4.16.0
 click==8.5.1
-fastapi==0.162.2
+fastapi==0.162.5
 h11==0.16.0
 idna==3.20
 opentelemetry-api==1.45.2
