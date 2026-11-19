@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.6.2
+- Web UI dependencies updated: fastapi 0.162.2 -> 0.165.0, annotated-doc 0.0.5 -> 0.0.7. No change in behaviour.
+
 ## 2.6.1
 - Logs: Kea no longer writes a line for every command the app sends it (one every ten seconds while the Leases tab was
   open), which pushed the useful lines out of the log. Problems with commands are still logged.
