@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.6.3
+- Web UI dependency updated: pydantic 2.14.3 -> 2.14.4, which fixes the memory problems of the JSON parser that pydantic 2.14.3 brought in. No change in behaviour.
+
 ## 2.6.2
 - Web UI dependencies updated: fastapi 0.162.2 -> 0.165.0, annotated-doc 0.0.5 -> 0.0.7. No change in behaviour.
 
