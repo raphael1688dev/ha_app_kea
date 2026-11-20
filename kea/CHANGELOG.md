@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.6.4
+- Dependency of the import from the DHCP server app updated: PyYAML 6.0.3 -> 6.0.4. No change in behaviour.
+
 ## 2.6.3
 - Web UI dependency updated: pydantic 2.14.3 -> 2.14.4, which fixes the memory problems of the JSON parser that pydantic 2.14.3 brought in. No change in behaviour.
 
