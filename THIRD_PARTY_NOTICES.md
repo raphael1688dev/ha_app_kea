@@ -56,4 +56,4 @@ Pinned in `kea/requirements.txt`; licenses as declared by each package.
 | typing-inspection | MIT |
 | uvicorn | BSD-3-Clause |
 
-Development and test tooling (`requirements-dev.txt`: pytest, httpx) is not part of the app's image.
+Development and test tooling (`requirements-dev.txt`: pytest, httpx2) is not part of the app's image.
